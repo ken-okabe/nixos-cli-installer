@@ -20,16 +20,11 @@ in
 
   # Define packages to be installed specifically for this user via Home Manager.
   home.packages = with pkgs; [
-    # pkgs.alacritty-themes is not directly used as theme is now disabled,
-    # but if user decides to use themes later, it's good to have it.
-    # Can be removed if no themes from this package are used.
-    # alacritty-themes
+    zellij # Install Zellij
 
     # Powerlevel10k and its dependencies
     zsh-powerlevel10k  # Powerlevel10k package itself
     (nerdfonts.override { fonts = [ "Meslo" ]; }) # Meslo Nerd Font (recommended).
-                                                # You can also specify other Nerd Fonts,
-                                                # e.g., "Hack", "FiraCode", "JetBrainsMono".
     git                # Required for Powerlevel10k's Git integration features.
 
     # Any other user-specific CLI tools or development utilities can go here.
@@ -117,26 +112,33 @@ in
         program = "${lib.getExe pkgs.zsh}";
         args = [
           "-c"
-          "${lib.getExe pkgs.zellij} --config ${config.home.homeDirectory}/.key-bindings.kdl --layout ${config.home.homeDirectory}/.layout-file.kdl"
+          # Zellij will use its config from ~/.config/zellij/ (managed by xdg.configFile below)
+          "${lib.getExe pkgs.zellij}"
         ];
       };
     };
   };
 
-  # Configure Zellij.
-  programs.zellij = {
-    enable = true;
+  # Place Zellij configuration files under ~/.config/zellij/ (using xdg.configFile).
+  # KDL files are assumed to be in a './zellij_config/' directory
+  # relative to where this Nix file is generated (e.g., in /etc/nixos/ upon installation),
+  # as the install-nixos.sh script is expected to place them accordingly.
+  xdg.configFile."zellij/key-bindings.kdl" = {
+    source = ./zellij_config/key-bindings.kdl; # Path relative to this Nix file once generated.
   };
 
-  # Place user-provided Zellij configuration files into $HOME.
-  # The install-nixos.sh script is expected to copy these KDL files
-  # into a 'config/' subdirectory within the NixOS configuration root (e.g., /etc/nixos/config/).
-  home.file.".key-bindings.kdl" = {
-    source = ./config/key-bindings.kdl; # Assumes key-bindings.kdl is in ./config/ relative to this file's location after generation.
+  xdg.configFile."zellij/layout.kdl" = { # Path relative to this Nix file once generated.
+                                          # Zellij typically uses 'default.kdl' for the default layout
+                                          # or a layout specified in 'config.kdl'.
+                                          # You might want to name this 'default.kdl' or 'my_layout.kdl'
+                                          # and ensure Zellij loads it.
+    source = ./zellij_config/layout-file.kdl; # Assuming this is your primary layout or to be referenced.
   };
-  home.file.".layout-file.kdl" = {
-    source = ./config/layout-file.kdl; # Assumes layout-file.kdl is in ./config/ relative to this file's location after generation.
-  };
+
+  # If you have a main Zellij configuration file (config.kdl), place it similarly:
+  # xdg.configFile."zellij/config.kdl" = {
+  #   source = ./zellij_config/config.kdl;
+  # };
 
   # xremap configuration via Home Manager.
   services.xremap = {

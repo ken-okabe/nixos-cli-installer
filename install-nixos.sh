@@ -7,7 +7,8 @@ set -e # Exit immediately if a command exits with a non-zero status.
 # Get the directory where the script is located to reference template files.
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 TEMPLATE_DIR="${SCRIPT_DIR}/templates"
-USER_CONFIG_FILES_DIR="${SCRIPT_DIR}/templates/config" # For user-provided Zellij configs
+# Updated to reflect the new directory name for Zellij KDL files
+USER_CONFIG_FILES_DIR="${SCRIPT_DIR}/templates/zellij_config"
 TARGET_NIXOS_CONFIG_DIR="/mnt/etc/nixos"                # NixOS config on the target mount
 
 # === Function Definitions ===
@@ -410,27 +411,27 @@ for item in "${module_templates[@]}"; do
     fi
 done
 
-# Copy user-provided Zellij config files (from templates/config/)
-# to /mnt/etc/nixos/config/ so home-manager-user.nix can source them with ./config/
-echo "Copying user-provided configuration files (for Zellij) into config/ subdirectory..."
+# Copy user-provided Zellij config files (from templates/zellij_config/)
+# to /mnt/etc/nixos/zellij_config/ so home-manager-user.nix can source them with ./zellij_config/
+echo "Copying user-provided configuration files (for Zellij) into zellij_config/ subdirectory..."
 if [[ -d "$USER_CONFIG_FILES_DIR" ]]; then
-    # Ensure the target config subdirectory exists
-    log_sudo_cmd mkdir -p "${TARGET_NIXOS_CONFIG_DIR}/config"
+    # Ensure the target zellij_config subdirectory exists
+    log_sudo_cmd mkdir -p "${TARGET_NIXOS_CONFIG_DIR}/zellij_config" # MODIFIED: Target subdirectory for KDL files
 
     for user_cfg_file in key-bindings.kdl layout-file.kdl; do # Add other files to this loop if needed
         if [[ -f "${USER_CONFIG_FILES_DIR}/${user_cfg_file}" ]]; then
-            # Copy to the 'config' subdirectory
-            if sudo cp "${USER_CONFIG_FILES_DIR}/${user_cfg_file}" "${TARGET_NIXOS_CONFIG_DIR}/config/${user_cfg_file}"; then
-                echo "LOG: ${user_cfg_file} copied successfully to ${TARGET_NIXOS_CONFIG_DIR}/config/."
+            # Copy to the 'zellij_config' subdirectory
+            if sudo cp "${USER_CONFIG_FILES_DIR}/${user_cfg_file}" "${TARGET_NIXOS_CONFIG_DIR}/zellij_config/${user_cfg_file}"; then # MODIFIED: Copy destination
+                echo "LOG: ${user_cfg_file} copied successfully to ${TARGET_NIXOS_CONFIG_DIR}/zellij_config/." # MODIFIED: Log message
             else
-                echo "WARNING: Failed to copy ${user_cfg_file} to ${TARGET_NIXOS_CONFIG_DIR}/config/."
+                echo "WARNING: Failed to copy ${user_cfg_file} to ${TARGET_NIXOS_CONFIG_DIR}/zellij_config/." # MODIFIED: Log message
             fi
         else
             echo "WARNING: User config file not found: ${USER_CONFIG_FILES_DIR}/${user_cfg_file}"
         fi
     done
 else
-    echo "WARNING: User config file directory ($USER_CONFIG_FILES_DIR) not found. Zellij configs may be missing."
+    echo "WARNING: User config file directory ($USER_CONFIG_FILES_DIR) not found. Zellij KDL configs may be missing."
 fi
 
 echo "All NixOS configuration files generated and placed in ${TARGET_NIXOS_CONFIG_DIR}/."
