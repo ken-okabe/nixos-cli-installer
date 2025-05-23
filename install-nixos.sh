@@ -411,15 +411,19 @@ for item in "${module_templates[@]}"; do
 done
 
 # Copy user-provided Zellij config files (from templates/config/)
-# to /mnt/etc/nixos/ so home-manager-user.nix can source them with ./
-echo "Copying user-provided configuration files (for Zellij)..."
+# to /mnt/etc/nixos/config/ so home-manager-user.nix can source them with ./config/
+echo "Copying user-provided configuration files (for Zellij) into config/ subdirectory..."
 if [[ -d "$USER_CONFIG_FILES_DIR" ]]; then
+    # Ensure the target config subdirectory exists
+    log_sudo_cmd mkdir -p "${TARGET_NIXOS_CONFIG_DIR}/config"
+
     for user_cfg_file in key-bindings.kdl layout-file.kdl; do # Add other files to this loop if needed
         if [[ -f "${USER_CONFIG_FILES_DIR}/${user_cfg_file}" ]]; then
-            if sudo cp "${USER_CONFIG_FILES_DIR}/${user_cfg_file}" "${TARGET_NIXOS_CONFIG_DIR}/${user_cfg_file}"; then
-                echo "LOG: ${user_cfg_file} copied successfully to ${TARGET_NIXOS_CONFIG_DIR}/."
+            # Copy to the 'config' subdirectory
+            if sudo cp "${USER_CONFIG_FILES_DIR}/${user_cfg_file}" "${TARGET_NIXOS_CONFIG_DIR}/config/${user_cfg_file}"; then
+                echo "LOG: ${user_cfg_file} copied successfully to ${TARGET_NIXOS_CONFIG_DIR}/config/."
             else
-                echo "WARNING: Failed to copy ${user_cfg_file} to ${TARGET_NIXOS_CONFIG_DIR}/."
+                echo "WARNING: Failed to copy ${user_cfg_file} to ${TARGET_NIXOS_CONFIG_DIR}/config/."
             fi
         else
             echo "WARNING: User config file not found: ${USER_CONFIG_FILES_DIR}/${user_cfg_file}"
