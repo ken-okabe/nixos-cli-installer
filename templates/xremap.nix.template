@@ -4,12 +4,12 @@
 # utilizing options provided by the xremap-flake.
 # Ensure `inputs.xremap-flake.nixosModules.default` is included in your
 # flake.nix's `modules` list for the NixOS configuration.
-{ config, pkgs, lib, inputs, ... }:
+{ config, pkgs, lib, inputs, nixosUsername, ... }: # MODIFIED: Added 'nixosUsername' to function arguments
 
 let
-  # Get the username from specialArgs passed by flake.nix.
+  # Get the username from specialArgs passed by flake.nix (now a direct argument).
   # This ensures xremap runs for the correct user.
-  username = config.specialArgs.nixosUsername;
+  username = nixosUsername; # MODIFIED: Use the direct 'nixosUsername' argument
 in
 {
   # Configure the xremap service.
@@ -19,13 +19,15 @@ in
   # The following is based on common patterns and your provided HOWTO.md link.
   services.xremap = { # This top-level option name might differ based on xremap-flake's module.
                       # The HOWTO.md example used 'services.xremap'.
+                      # Often, modules from flakes might use a more specific name like 'services.xremap-daemon'
+                      # or similar to avoid conflicts. Double-check xremap-flake's NixOS module options.
     enable = true;
 
     # Enable GNOME-specific integration for better application focus detection on Wayland.
-    withGnome = true;
+    withGnome = true; # Ensure this option is actually provided by the xremap-flake NixOS module.
 
     # Run xremap as a user service, managed by the system.
-    serviceMode = "user";
+    serviceMode = "user"; # Ensure this option is actually provided by the xremap-flake NixOS module.
     userName = username;  # Specify the user for whom the service will run.
 
     # You can set other xremap service options here if needed, based on documentation:
@@ -48,15 +50,15 @@ in
 
       # `keymap` entries are for remapping key combinations.
       # keymap = [
-      #   {
-      #     name = "Example Application Shortcut";
-      #     application = { # Application-specific remapping (if xremap and its integration supports it)
-      #       only = ["firefox"]; # Example: only apply in Firefox
-      #     };
-      #     remap = {
-      #       "Ctrl-Shift-N" = "Ctrl-Alt-Delete"; # Example: remap Ctrl-Shift-N
-      #     };
-      #   }
+      #  {
+      #    name = "Example Application Shortcut";
+      #    application = { # Application-specific remapping (if xremap and its integration supports it)
+      #      only = ["firefox"]; # Example: only apply in Firefox
+      #    };
+      #    remap = {
+      #      "Ctrl-Shift-N" = "Ctrl-Alt-Delete"; # Example: remap Ctrl-Shift-N
+      #    };
+      #  }
       # ];
     };
   };
