@@ -9,7 +9,7 @@
 
     # Home Manager for managing user-specific dotfiles and services.
     home-manager = {
-      url = "github:nix-community/home-manager";
+      url = "github:nix-community/home-manager/release-25.05"; # Changed: Use the release branch corresponding to nixpkgs version.
       inputs.nixpkgs.follows = "nixpkgs"; # Ensure Home Manager uses the same Nixpkgs.
     };
 
@@ -56,7 +56,7 @@
         ./sound.nix                  # PipeWire audio setup.
         ./bluetooth.nix              # Bluetooth support.
         ./virtualbox-guest.nix       # Settings for VirtualBox guest integration.
-        ./system-customizations.nix   # Kernel, Nix GC, allowUnfree packages, Flakes enabling.
+        ./system-customizations.nix  # Kernel, Nix GC, allowUnfree packages, Flakes enabling.
 
         # User and package management.
         ./users.nix                  # User accounts, passwords, sudo.
@@ -69,7 +69,7 @@
 
         # Key remapping.
         inputs.xremap-flake.nixosModules.default # Import xremap's NixOS module.
-        ./xremap.nix                            # Your specific xremap configuration.
+        ./xremap.nix                             # Your specific xremap configuration.
 
         # Home Manager integration for user-specific configurations.
         home-manager.nixosModules.home-manager # Enable the Home Manager NixOS module.
@@ -89,7 +89,7 @@
 
         # This should be the last imported module or set directly.
         # It defines the NixOS release from which stateful settings defaults are taken.
-        { system.stateVersion = "25.05"; } # Set to the NixOS version you are installing.
+        { system.stateVersion = "25.05"; } # Set to the NixOS version you are installing (or your target NixOS version).
       ];
     };
   };
