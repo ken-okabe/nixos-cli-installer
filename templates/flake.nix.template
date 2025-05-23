@@ -9,7 +9,7 @@
 
     # Home Manager for managing user-specific dotfiles and services.
     home-manager = {
-      url = "github:nix-community/home-manager/release-25.05"; # Changed: Use the release branch corresponding to nixpkgs version.
+      url = "github:nix-community/home-manager/release-25.05"; # Matched to nixpkgs version.
       inputs.nixpkgs.follows = "nixpkgs"; # Ensure Home Manager uses the same Nixpkgs.
     };
 
@@ -42,8 +42,8 @@
         # Pass all Flake inputs to the modules.
         inherit inputs;
         # Pass specific custom arguments to the modules.
-        inherit nixosUsername gitUsername gitUseremail;
-        # xremap-flake is available via 'inputs.xremap-flake' but can be passed explicitly if a module needs it directly.
+        inherit nixosUsername gitUsername gitUseremail hostname; # Added hostname here as well
+        # xremap-flake is available via 'inputs.xremap-flake'.
       };
       modules = [
         # Core hardware and boot configuration.
@@ -67,9 +67,9 @@
         # Desktop Environment.
         ./gnome-desktop.nix          # GNOME Desktop Environment configuration.
 
-        # Key remapping.
+        # Key remapping (NixOS system-level).
         inputs.xremap-flake.nixosModules.default # Import xremap's NixOS module.
-        ./xremap.nix                             # Your specific xremap configuration.
+        ./xremap.nix                             # Your specific xremap configuration for NixOS.
 
         # Home Manager integration for user-specific configurations.
         home-manager.nixosModules.home-manager # Enable the Home Manager NixOS module.
@@ -81,10 +81,20 @@
             inherit inputs; # Pass Flake inputs to Home Manager modules.
             # Pass custom arguments to Home Manager modules.
             username = nixosUsername; # Note: HM uses 'username', NixOS modules use 'nixosUsername' via specialArgs.
-            inherit gitUsername gitUseremail;
+            inherit gitUsername gitUseremail hostname; # Pass hostname for aliases etc.
           };
           # Specify the Home Manager configuration for the primary user.
-          home-manager.users.${nixosUsername} = import ./home-manager-user.nix;
+          home-manager.users.${nixosUsername} = {
+            imports = [
+              # Import xremap's Home Manager module.
+              inputs.xremap-flake.homeManagerModules.default
+              # Import your existing user-specific configurations.
+              (import ./home-manager-user.nix)
+            ];
+            # If you encounter issues with pkgs not being found in home-manager-user.nix,
+            # you might need to explicitly pass pkgs here, though it's often inferred.
+            # pkgs = nixpkgs.legacyPackages.${system};
+          };
         }
 
         # This should be the last imported module or set directly.

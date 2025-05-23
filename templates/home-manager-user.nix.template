@@ -11,6 +11,7 @@ let
   username = config.specialArgs.username;
   gitUsername = config.specialArgs.gitUsername;
   gitUseremail = config.specialArgs.gitUseremail;
+  hostname = config.specialArgs.hostname; # Added to use hostname in aliases if needed
 in
 {
   # Set the state version for Home Manager.
@@ -62,7 +63,7 @@ in
   programs.gh = {
     enable = true;
     # Use legacyPackages for extensions when nixpkgs is a Flake input.
-    extensions = with inputs.nixpkgs.legacyPackages.${pkgs.system}; [
+    extensions = with inputs.nixpkgs.legacyPackages.${pkgs.system}; [ # Check if inputs is available here, passed via specialArgs.
       gh-markdown-preview # For previewing markdown files.
     ];
     settings = {
@@ -86,7 +87,7 @@ in
     # You can add custom Zsh aliases, functions, or source other files here.
     shellAliases = {
       ll = "ls -l";
-      update-system = "sudo nixos-rebuild switch --flake /etc/nixos#${config.specialArgs.hostname}";
+      update-system = "sudo nixos-rebuild switch --flake /etc/nixos#${hostname}"; # Use hostname from specialArgs
     };
     initExtra = ''
       # Custom Zsh settings
@@ -113,6 +114,13 @@ in
       fi
     '';
   };
+
+  # Configure Powerlevel10k.
+  # The `programs.powerlevel10k` module is not used in this direct setup.
+  # Powerlevel10k is installed via `home.packages` and sourced in `programs.zsh.initExtra`.
+  # programs.powerlevel10k = {
+  #   enable = true;
+  # };
 
   # Configure Alacritty terminal emulator.
   programs.alacritty = {
@@ -179,18 +187,14 @@ in
     source = ./layout-file.kdl;
   };
 
-  # xremap configuration via Home Manager (if xremap-flake provides an HM module)
-  # This is often preferred for key remappers as they are user-session specific.
-  # Consult xremap-flake documentation for its Home Manager options.
-  # The following is an ILLUSTRATIVE example, actual options may differ.
-  # Ensure xremap-flake is an input in your main flake.nix and passed to HM's specialArgs.
-
-  services.xremap = { # This is a common top-level option name for HM services.
+  # xremap configuration via Home Manager.
+  # This relies on xremap-flake's Home Manager module being imported in flake.nix.
+  services.xremap = {
     enable = true;
-    # If the HM module for xremap-flake requires specifying the package:
-    # package = inputs.xremap-flake.packages.${pkgs.system}.default;
-    # Or, the HM module might provide its own default package.
-    config = { # This structure depends entirely on xremap-flake's HM module.
+    # The xremap-flake Home Manager module handles package provision.
+    # You might configure specific package version using inputs in flake.nix if needed.
+    # package = inputs.xremap-flake.packages.${pkgs.system}.default; # Usually not needed here if module handles it.
+    config = { # This structure depends on xremap-flake's Home Manager module.
       modmap = [
         {
           name = "User Global Remaps";
@@ -202,11 +206,8 @@ in
       # keymap = [ ... ]; # For more complex key combination remaps.
     };
     # withGnome = true; # Or similar options if provided by xremap-flake's HM module.
+                      # Check xremap-flake documentation for available options.
   };
-  # If xremap is configured as a NixOS system service (in xremap.nix),
-  # then this section in Home Manager might not be needed, or might configure
-  # user-specific aspects if the xremap architecture supports it.
-  # For now, assuming xremap is handled by the NixOS module as per previous discussion.
 
   # Standard XDG user directories.
   xdg.userDirs.enable = true;
