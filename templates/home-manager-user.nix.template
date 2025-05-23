@@ -2,18 +2,18 @@
 #
 # Home Manager configuration for the primary user.
 # This file manages user-specific dotfiles, applications, and services.
-{ pkgs, lib, config, inputs, specialArgs, ... }: # MODIFIED: Added specialArgs to function arguments
+{ pkgs, lib, config, inputs, specialArgs, ... }:
 
 let
-  # MODIFIED: Accessing specialArgs directly from the function arguments
   username = specialArgs.username;
   gitUsername = specialArgs.gitUsername;
   gitUseremail = specialArgs.gitUseremail;
-  hostname = specialArgs.hostname; # This was line 14, where the error occurred
+  hostname = specialArgs.hostname;
 in
 {
-  # MODIFIED: Use the system's stateVersion for Home Manager's stateVersion
-  home.stateVersion = config.system.stateVersion;
+  # MODIFIED: Reverted to a static string, matching the system's stateVersion.
+  # Ensure this matches system.stateVersion in your flake.nix (e.g., "25.05").
+  home.stateVersion = "25.05";
 
   # Define packages to be installed specifically for this user via Home Manager.
   home.packages = with pkgs; [
@@ -38,10 +38,10 @@ in
   # Configure Git for the user.
   programs.git = {
     enable = true;
-    userName = gitUsername;  # Uses gitUsername from the let block
-    userEmail = gitUseremail; # Uses gitUseremail from the let block
+    userName = gitUsername;
+    userEmail = gitUseremail;
     extraConfig = {
-      init.defaultBranch = "main"; # Set default branch to 'main' for new repositories.
+      init.defaultBranch = "main";
     };
   };
 
@@ -49,26 +49,24 @@ in
   programs.gh = {
     enable = true;
     extensions = with inputs.nixpkgs.legacyPackages.${pkgs.system}; [
-      gh-markdown-preview # For previewing markdown files.
+      gh-markdown-preview
     ];
     settings = {
-      editor = "nano";       # Default editor for gh commands.
-      git_protocol = "ssh";  # Use SSH for Git operations with GitHub (recommended).
+      editor = "nano";
+      git_protocol = "ssh";
     };
   };
 
   # Configure Zsh shell.
   programs.zsh = {
     enable = true;
-    enableAutosuggestions = true;    # Enable command suggestions based on history.
-    enableSyntaxHighlighting = true; # Enable syntax highlighting in the Zsh prompt.
+    enableAutosuggestions = true;
+    enableSyntaxHighlighting = true;
 
     shellAliases = {
       ll = "ls -l";
-      # Uses 'hostname' from the let block
       update-system = "sudo nixos-rebuild switch --flake /etc/nixos#${hostname}";
     };
-    # MODIFIED: initExtra changed to initContent to address deprecation warning.
     initContent = ''
       # Custom Zsh settings
       export EDITOR=nano
@@ -111,7 +109,6 @@ in
         program = "${lib.getExe pkgs.zsh}";
         args = [
           "-c"
-          # Zellij will use its config from ~/.config/zellij/ (managed by xdg.configFile below)
           "${lib.getExe pkgs.zellij}"
         ];
       };
@@ -119,19 +116,12 @@ in
   };
 
   # Place Zellij configuration files under ~/.config/zellij/ (using xdg.configFile).
-  # KDL files are assumed to be in a './zellij_config/' directory
-  # relative to where this Nix file is generated (e.g., in /etc/nixos/ upon installation),
-  # as the install-nixos.sh script is expected to place them accordingly.
   xdg.configFile."zellij/key-bindings.kdl" = {
-    source = ./zellij_config/key-bindings.kdl; # Path relative to this Nix file once generated.
+    source = ./zellij_config/key-bindings.kdl;
   };
 
-  xdg.configFile."zellij/layout.kdl" = { # Path relative to this Nix file once generated.
-                                          # Zellij typically uses 'default.kdl' for the default layout
-                                          # or a layout specified in 'config.kdl'.
-                                          # You might want to name this 'default.kdl' or 'my_layout.kdl'
-                                          # and ensure Zellij loads it.
-    source = ./zellij_config/layout-file.kdl; # Assuming this is your primary layout or to be referenced.
+  xdg.configFile."zellij/layout.kdl" = {
+    source = ./zellij_config/layout-file.kdl;
   };
 
   # If you have a main Zellij configuration file (config.kdl), place it similarly:
