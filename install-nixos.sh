@@ -80,10 +80,10 @@ done
 SWAP_SIZE_GB="16" # Fixed to 16GiB as per user request
 DEFAULT_EFI_SIZE_MiB="512"  # Size for EFI in MiB
 
-EFI_PART_NAME="EFI"         # Label for the EFI partition
-SWAP_PART_NAME="SWAP"       # Label for the Swap partition
-ROOT_PART_NAME="ROOT_NIXOS" # Label for the Root partition
-DEFAULT_ROOT_FS_TYPE="ext4"
+EFI_PART_NAME="EFI"         # Filesystem Label for the EFI partition
+SWAP_PART_NAME="SWAP"       # Filesystem Label for the Swap partition
+ROOT_PART_NAME="ROOT_NIXOS" # Filesystem Label for the Root partition
+DEFAULT_ROOT_FS_TYPE="ext4" # Filesystem type for Root
 
 # 1.3. System Username
 echo ""
@@ -158,7 +158,7 @@ if ! confirm "Review the summary above. Do you want to proceed with these settin
 fi
 echo "--------------------------------------------------------------------"
 
-# --- 2. Disk Partitioning, Formatting, and Mounting (Using parted, EFI -> Root -> Swap order) ---
+# --- 2. Disk Partitioning, Formatting, and Mounting (Using parted, EFI -> Root -> Swap physical order) ---
 echo "Step 2: Starting disk partitioning, formatting, and mounting on $TARGET_DISK..."
 echo "This will ERASE ALL DATA on $TARGET_DISK."
 if ! confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK with parted?"; then
@@ -172,46 +172,48 @@ fi
     echo "GPT label created."
 
     # Get total disk size in MiB for calculations
+    # Use printf for locale-independent float to int conversion
     TOTAL_DISK_MiB_FOR_PARTED_FLOAT=$(sudo parted --script "$TARGET_DISK" unit MiB print | awk '/^Disk \/dev\// {gsub(/MiB/,""); print $3}')
     if ! [[ "$TOTAL_DISK_MiB_FOR_PARTED_FLOAT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         echo "Error: Could not determine total disk size in MiB for $TARGET_DISK."
         exit 1
     fi
-    TOTAL_DISK_MiB_FOR_PARTED_INT=$(printf "%.0f" "$TOTAL_DISK_MiB_FOR_PARTED_FLOAT") # Round to nearest integer for bash calculations
+    TOTAL_DISK_MiB_FOR_PARTED_INT=$(printf "%.0f" "$TOTAL_DISK_MiB_FOR_PARTED_FLOAT")
     echo "Total disk size (for parted calculations): ${TOTAL_DISK_MiB_FOR_PARTED_INT}MiB"
 
     # Convert SWAP GiB to MiB for parted calculations
     SWAP_SIZE_REQUESTED_MiB_INT=$((SWAP_SIZE_GB * 1024))
 
-    # 1. Create EFI Partition (physical first)
-    EFI_START_OFFSET_MiB="1" # Standard starting offset for alignment
+    # 1. Create EFI Partition (will become ${TARGET_DISK}1 by kernel naming)
+    EFI_START_OFFSET_MiB="1" # Standard starting offset for alignment (1MiB from actual start)
     EFI_END_OFFSET_MiB="$((EFI_START_OFFSET_MiB + DEFAULT_EFI_SIZE_MiB))"
-    echo "Creating EFI partition (from ${EFI_START_OFFSET_MiB}MiB to ${EFI_END_OFFSET_MiB}MiB)..."
+    echo "Creating EFI partition (parted name: $EFI_PART_NAME, from ${EFI_START_OFFSET_MiB}MiB to ${EFI_END_OFFSET_MiB}MiB)..."
     sudo parted --script "$TARGET_DISK" unit MiB mkpart "$EFI_PART_NAME" fat32 "$EFI_START_OFFSET_MiB" "$EFI_END_OFFSET_MiB"
-    sudo parted --script "$TARGET_DISK" set 1 esp on # Set ESP flag (boot flag for GPT)
+    sudo parted --script "$TARGET_DISK" set 1 esp on # Set ESP flag on partition 1
     EFI_DEVICE_NODE="${TARGET_DISK}1" # Kernel will likely name this sda1, etc.
     echo "EFI partition created as ${EFI_DEVICE_NODE}."
 
-    # 2. Root Partition (physical second)
+    # 2. Create Root Partition (will become ${TARGET_DISK}2)
     ROOT_START_OFFSET_MiB="$EFI_END_OFFSET_MiB"
     # Calculate where Root should end to leave space for Swap
     ROOT_END_OFFSET_MiB="$((TOTAL_DISK_MiB_FOR_PARTED_INT - SWAP_SIZE_REQUESTED_MiB_INT))"
-    if [ "$ROOT_START_OFFSET_MiB" -ge "$ROOT_END_OFFSET_MiB" ]; then # Use integer comparison
+    # Ensure there's actually space for the root partition
+    if [ "$(printf "%.0f" "$ROOT_START_OFFSET_MiB")" -ge "$(printf "%.0f" "$ROOT_END_OFFSET_MiB")" ]; then
         echo "Error: Calculated space for ROOT partition is invalid or too small."
-        echo "       EFI ends at ${EFI_END_OFFSET_MiB}MiB, Swap needs ${SWAP_SIZE_REQUESTED_MiB_INT}MiB, Total ${TOTAL_DISK_MiB_FOR_PARTED_INT}MiB."
+        echo "       EFI ends at ${EFI_END_OFFSET_MiB}MiB, Swap needs ${SWAP_SIZE_REQUESTED_MiB_INT}MiB, Total disk ${TOTAL_DISK_MiB_FOR_PARTED_INT}MiB."
         exit 1
     fi
-    echo "Creating ROOT partition (from ${ROOT_START_OFFSET_MiB}MiB to ${ROOT_END_OFFSET_MiB}MiB)..."
+    echo "Creating ROOT partition (parted name: $ROOT_PART_NAME, fs: $DEFAULT_ROOT_FS_TYPE, from ${ROOT_START_OFFSET_MiB}MiB to ${ROOT_END_OFFSET_MiB}MiB)..."
     sudo parted --script "$TARGET_DISK" unit MiB mkpart "$ROOT_PART_NAME" "$DEFAULT_ROOT_FS_TYPE" "$ROOT_START_OFFSET_MiB" "$ROOT_END_OFFSET_MiB"
-    ROOT_DEVICE_NODE="${TARGET_DISK}2" # Kernel will likely name this sda2, etc.
+    ROOT_DEVICE_NODE="${TARGET_DISK}2"
     echo "ROOT partition created as ${ROOT_DEVICE_NODE}."
 
-    # 3. Swap Partition (physical third, in the remaining space at the end)
+    # 3. Swap Partition (will become ${TARGET_DISK}3, in the remaining space at the end)
     SWAP_START_OFFSET_MiB="$ROOT_END_OFFSET_MiB"
     # End at 100% of disk (parted handles this for the last partition)
-    echo "Creating SWAP partition (from ${SWAP_START_OFFSET_MiB}MiB to 100%)..."
+    echo "Creating SWAP partition (parted name: $SWAP_PART_NAME, fs: linux-swap, from ${SWAP_START_OFFSET_MiB}MiB to 100%)..."
     sudo parted --script "$TARGET_DISK" unit MiB mkpart "$SWAP_PART_NAME" linux-swap "$SWAP_START_OFFSET_MiB" 100%
-    SWAP_DEVICE_NODE="${TARGET_DISK}3" # Kernel will likely name this sda3, etc.
+    SWAP_DEVICE_NODE="${TARGET_DISK}3"
     echo "SWAP partition created as ${SWAP_DEVICE_NODE}."
 
     echo "Final partition layout on $TARGET_DISK (using parted print):"
@@ -219,20 +221,25 @@ fi
     echo "Informing kernel of partition table changes..."
     sudo partprobe "$TARGET_DISK" && sleep 3 # Give kernel time to recognize changes.
 
-    echo "Formatting partitions..."
-    # We will use the device nodes derived from partition order for formatting,
-    # and set filesystem labels with mkfs.
+    echo "Formatting partitions and setting filesystem labels..."
+    # Format EFI partition (${TARGET_DISK}1) as FAT32 with EFI label
+    echo "Formatting $EFI_DEVICE_NODE (EFI) as fat32 with label $EFI_PART_NAME..."
     sudo mkfs.vfat -F 32 -n "$EFI_PART_NAME" "$EFI_DEVICE_NODE"
+
+    # Format Root partition (${TARGET_DISK}2) as ext4 with ROOT_NIXOS label
+    echo "Formatting $ROOT_DEVICE_NODE (ROOT) as $DEFAULT_ROOT_FS_TYPE with label $ROOT_PART_NAME..."
     sudo mkfs."$DEFAULT_ROOT_FS_TYPE" -L "$ROOT_PART_NAME" "$ROOT_DEVICE_NODE"
+
+    # Create Swap on Swap partition (${TARGET_DISK}3) with SWAP label
+    echo "Creating SWAP filesystem on $SWAP_DEVICE_NODE (SWAP) with label $SWAP_PART_NAME..."
     sudo mkswap -L "$SWAP_PART_NAME" "$SWAP_DEVICE_NODE"
     echo "Partitions formatted."
 
-    echo "Mounting filesystems..."
-    # Mount by label, which were set during mkfs.
+    echo "Mounting filesystems to /mnt..."
+    # Mount by LABEL for robustness, after labels have been set by mkfs commands
     sudo mount -L "$ROOT_PART_NAME" /mnt
     sudo mkdir -p /mnt/boot
-    # For EFI, some prefer mounting by device or UUID, but label should also work if set by mkfs.vfat.
-    # If mkfs.vfat -n doesn't create a /dev/disk/by-label entry reliably, use $EFI_DEVICE_NODE.
+    # For EFI, mounting by its device node is common. Its FS label was set by mkfs.vfat -n.
     sudo mount "$EFI_DEVICE_NODE" /mnt/boot
     sudo swapon -L "$SWAP_PART_NAME"
     echo "Filesystems mounted."
@@ -241,7 +248,7 @@ fi
     df -h /mnt /mnt/boot
     lsblk -fpo NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT "$TARGET_DISK"
 
-} || {
+} || { # Catch any error within the disk operations block.
     echo "ERROR: A critical error occurred during disk operations."
     exit 1
 }
@@ -257,7 +264,7 @@ sudo nixos-generate-config --root /mnt || {
 echo "hardware-configuration.nix generated at ${TARGET_NIXOS_CONFIG_DIR}/hardware-configuration.nix."
 if [ -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix" ]; then
     echo "Note: A base configuration.nix was also generated by nixos-generate-config."
-    echo "      This base configuration.nix will NOT be used by our Flake if not listed in flake.nix's modules."
+    echo "      This base configuration.nix will NOT be used by our Flake if not explicitly listed in flake.nix's modules."
 fi
 echo "--------------------------------------------------------------------"
 
@@ -265,6 +272,7 @@ echo "--------------------------------------------------------------------"
 echo "Step 4: Generating Flake and custom NixOS module files..."
 sudo mkdir -p "${TARGET_NIXOS_CONFIG_DIR}"
 
+# Function to generate a config file from a template using sed for substitutions.
 generate_from_template() {
     local template_file_basename="$1"
     local output_file_basename="$2"
@@ -277,25 +285,32 @@ generate_from_template() {
     fi
 
     local sed_script=""
-    # Using | as sed delimiter to avoid issues if paths/hashes contain /
-    sed_script+="-e \"s|__NIXOS_USERNAME__|${NIXOS_USERNAME}|g\" "
-    # For PASSWORD_HASH, ensure it doesn't contain the sed delimiter itself, or escape it.
-    # Since mkpasswd $6$ format doesn't usually contain '|', this should be safe.
-    sed_script+="-e \"s|__PASSWORD_HASH__|${PASSWORD_HASH}|g\" "
-    sed_script+="-e \"s|__GIT_USERNAME__|${GIT_USERNAME}|g\" "
-    sed_script+="-e \"s|__GIT_USEREMAIL__|${GIT_USEREMAIL}|g\" "
-    sed_script+="-e \"s|__HOSTNAME__|${HOSTNAME}|g\" "
-    sed_script+="-e \"s|__TARGET_DISK_FOR_GRUB__|${TARGET_DISK}|g\" "
+    # Using | as the sed delimiter to avoid issues if paths or hashes contain '/'.
+    # Ensure placeholders are unique (e.g., __KEY__).
+    # The order of -e options doesn't strictly matter but grouping by var helps.
+    sed_script+="-e s|__NIXOS_USERNAME__|${NIXOS_USERNAME}|g "
+    # For PASSWORD_HASH, ensure sed handles the '$' characters correctly.
+    # It's better to use a delimiter not present in the hash, like '@' or ':'.
+    # Let's assume the hash doesn't contain '|'. If issues, use different delimiter.
+    sed_script+="-e s|__PASSWORD_HASH__|${PASSWORD_HASH}|g "
+    sed_script+="-e s|__GIT_USERNAME__|${GIT_USERNAME}|g "
+    sed_script+="-e s|__GIT_USEREMAIL__|${GIT_USEREMAIL}|g "
+    sed_script+="-e s|__HOSTNAME__|${HOSTNAME}|g "
+    sed_script+="-e s|__TARGET_DISK_FOR_GRUB__|${TARGET_DISK}|g " # For bootloader.nix if using GRUB
 
     local temp_output
     temp_output=$(mktemp)
+
+    # Debug: echo "sed_script for $output_file_basename: $sed_script"
+    # Debug: echo "template_path: $template_path"
+    # Debug: echo "temp_output: $temp_output"
 
     if command sudo sed "${sed_script}" "${template_path}" > "${temp_output}"; then
         if sudo mv "$temp_output" "$output_path"; then
             echo "${output_file_basename} generated successfully at ${output_path}."
             sudo chmod 644 "$output_path"
         else
-            echo "ERROR: Failed to move temporary file to ${output_path}."
+            echo "ERROR: Failed to move temporary file to ${output_path} (sudo mv \"$temp_output\" \"$output_path\")."
             rm -f "$temp_output"
             return 1
         fi
@@ -308,6 +323,7 @@ generate_from_template() {
     return 0
 }
 
+# List of templates and their corresponding output file names.
 declare -a module_templates=(
     "flake.nix.template:flake.nix"
     "system-settings.nix.template:system-settings.nix"
@@ -326,21 +342,26 @@ declare -a module_templates=(
     "home-manager-user.nix.template:home-manager-user.nix"
 )
 
+# Generate each module file from its template.
 for item in "${module_templates[@]}"; do
-    IFS=":" read -r template_name output_name <<< "$item"
+    IFS=":" read -r template_name output_name <<< "$item" # Split "template:output"
     if ! generate_from_template "$template_name" "$output_name"; then
         echo "ERROR: Failed to generate ${output_name}. Aborting installation."
+        # Consider cleanup steps here if needed (e.g., umount partitions).
         exit 1
     fi
 done
 
+# Copy user-provided Zellij config files (from templates/config/)
+# to /mnt/etc/nixos/ so home-manager-user.nix can source them with ./
 echo "Copying user-provided configuration files (for Zellij)..."
 if [[ -d "$USER_CONFIG_FILES_DIR" ]]; then
-    for user_cfg_file in key-bindings.kdl layout-file.kdl; do
+    for user_cfg_file in key-bindings.kdl layout-file.kdl; do # Add other files to this loop if needed
         if [[ -f "${USER_CONFIG_FILES_DIR}/${user_cfg_file}" ]]; then
             if sudo cp "${USER_CONFIG_FILES_DIR}/${user_cfg_file}" "${TARGET_NIXOS_CONFIG_DIR}/${user_cfg_file}"; then
                 echo "${user_cfg_file} copied successfully to ${TARGET_NIXOS_CONFIG_DIR}/."
             else
+                # Warn but continue, user can fix manually if copy fails.
                 echo "WARNING: Failed to copy ${user_cfg_file} to ${TARGET_NIXOS_CONFIG_DIR}/."
             fi
         else
@@ -361,6 +382,8 @@ echo "You will see a lot of build output."
 echo ""
 if confirm "Proceed with NixOS installation?"; then
     echo "Starting nixos-install. This may take a while..."
+    # Use --no-root-passwd because rootHashedPassword is set declaratively in users.nix.
+    # The HOSTNAME variable from user input is used in the Flake URI.
     if sudo nixos-install --no-root-passwd --flake "${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}"; then
         echo ""
         echo "--------------------------------------------------------------------"
