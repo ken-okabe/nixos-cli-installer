@@ -43,4 +43,7 @@ in
     # Enable sudo functionality (usually enabled by default).
     # enable = true;
   };
+
+  programs.zsh.enable = true; 
+
 }

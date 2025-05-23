@@ -24,8 +24,7 @@
   # Enable OpenGL and Vulkan support for graphics.
   hardware.opengl = {
     enable = true;
-    driSupport = true;        # Enable Direct Rendering Infrastructure (DRI) for 3D acceleration.
-    driSupport32Bit = true;   # Enable 32-bit DRI support for older applications/games.
+
     # For AMD GPUs (like "vulkan-radeon" implies), Mesa drivers are typically used.
     # These are usually enabled by default with hardware.opengl.enable.
     # If specific drivers are needed, they can be specified:

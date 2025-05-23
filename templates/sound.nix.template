@@ -4,9 +4,6 @@
 # for audio and video handling on Linux.
 { pkgs, ... }: {
 
-  # Enable basic sound support in NixOS.
-  sound.enable = true;
-
   # Explicitly disable PulseAudio, as PipeWire will provide a
   # PulseAudio-compatible server. This avoids potential conflicts.
   hardware.pulseaudio.enable = false;
