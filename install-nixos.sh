@@ -186,9 +186,9 @@ fi
 { # Start of disk operations block
     echo "LOG: Creating new GPT partition table on $TARGET_DISK..."
     log_sudo_cmd parted --script "$TARGET_DISK" mklabel gpt
-    echo "LOG: GPT label created."
-    echo "LOG: Disk layout after mklabel gpt:"
-    sudo parted --script "$TARGET_DISK" print
+    echo "LOG: New GPT partition table created. Disk is now logically empty of partitions."
+    echo "LOG: Current disk state (should show an empty GPT table or no partitions):"
+    sudo parted --script "$TARGET_DISK" print # Shows the disk after mklabel
     echo "-------------------------------------"
 
     # Get total disk size in MiB for calculations
@@ -201,108 +201,95 @@ fi
     TOTAL_DISK_MiB_FOR_PARTED_INT=$(printf "%.0f" "$TOTAL_DISK_MiB_FOR_PARTED_FLOAT")
     echo "LOG: Total disk size (for parted calculations): ${TOTAL_DISK_MiB_FOR_PARTED_INT}MiB"
 
-    # Convert SWAP GiB to MiB for parted calculations
     SWAP_SIZE_REQUESTED_MiB_INT=$((SWAP_SIZE_GB * 1024))
     echo "LOG: Requested EFI Size: ${DEFAULT_EFI_SIZE_MiB}MiB, Requested SWAP Size: ${SWAP_SIZE_REQUESTED_MiB_INT}MiB"
 
-    # GPT Partition Names (used by parted mkpart)
+    # GPT Partition Names
     EFI_PART_GPT_NAME="$EFI_PART_NAME"
     ROOT_PART_GPT_NAME="$ROOT_PART_NAME"
     SWAP_PART_GPT_NAME="$SWAP_PART_NAME"
 
-    # 1. Create EFI Partition (will become ${TARGET_DISK}1 by kernel naming)
-    EFI_START_OFFSET_MiB="1" # Standard starting offset for alignment
-    EFI_END_OFFSET_MiB="$((EFI_START_OFFSET_MiB + DEFAULT_EFI_SIZE_MiB))"
-    echo "LOG: Creating EFI partition placeholder: Name='$EFI_PART_GPT_NAME', Start='${EFI_START_OFFSET_MiB}MiB', End='${EFI_END_OFFSET_MiB}MiB'"
-    log_sudo_cmd parted --script "$TARGET_DISK" unit MiB mkpart "$EFI_PART_GPT_NAME" "$EFI_START_OFFSET_MiB" "$EFI_END_OFFSET_MiB"
-    echo "LOG: Setting EFI partition type to 'EFI System' (EF00) for partition 1 using sgdisk..."
-    log_sudo_cmd sgdisk --typecode=1:EF00 "$TARGET_DISK"
-    echo "LOG: Setting ESP (boot) flag for partition 1 using parted..."
-    log_sudo_cmd parted --script "$TARGET_DISK" set 1 esp on
-    EFI_DEVICE_NODE="${TARGET_DISK}1" # Assuming /dev/sda, /dev/nvme0n1, etc.
-    if [[ "$TARGET_DISK" == /dev/nvme* ]]; then EFI_DEVICE_NODE="${TARGET_DISK}p1"; fi
-    echo "LOG: EFI partition configured (intended as ${EFI_DEVICE_NODE}). Current layout:"
-    sudo parted --script "$TARGET_DISK" print
-    echo "-------------------------------------"
+    # Define partition device node suffixes (e.g., '1' or 'p1')
+    PART_SUFFIX_1="1"; PART_SUFFIX_2="2"; PART_SUFFIX_3="3"
+    if [[ "$TARGET_DISK" == /dev/nvme* ]]; then
+        PART_SUFFIX_1="p1"; PART_SUFFIX_2="p2"; PART_SUFFIX_3="p3"
+    fi
+    EFI_DEVICE_NODE="${TARGET_DISK}${PART_SUFFIX_1}"
+    ROOT_DEVICE_NODE="${TARGET_DISK}${PART_SUFFIX_2}"
+    SWAP_DEVICE_NODE="${TARGET_DISK}${PART_SUFFIX_3}"
 
-    # 2. Create Root Partition (will become ${TARGET_DISK}2 or ${TARGET_DISK}p2)
+    echo "LOG: Defining partition structure (EFI, Root, Swap)..."
+    # 1. EFI Partition
+    EFI_START_OFFSET_MiB="1"
+    EFI_END_OFFSET_MiB="$((EFI_START_OFFSET_MiB + DEFAULT_EFI_SIZE_MiB))"
+    log_sudo_cmd parted --script "$TARGET_DISK" unit MiB mkpart "$EFI_PART_GPT_NAME" "$EFI_START_OFFSET_MiB" "$EFI_END_OFFSET_MiB"
+    log_sudo_cmd sgdisk --typecode=1:EF00 "$TARGET_DISK" # EF00 = EFI System
+    log_sudo_cmd parted --script "$TARGET_DISK" set 1 esp on
+
+    # 2. Root Partition
     ROOT_START_OFFSET_MiB="$EFI_END_OFFSET_MiB"
-    # Calculate where Root should end to leave space for Swap
     ROOT_END_OFFSET_MiB="$((TOTAL_DISK_MiB_FOR_PARTED_INT - SWAP_SIZE_REQUESTED_MiB_INT))"
-    # Ensure there's actually space for the root partition
     if [ "$(printf "%.0f" "$ROOT_START_OFFSET_MiB")" -ge "$(printf "%.0f" "$ROOT_END_OFFSET_MiB")" ]; then
-        echo "Error: Calculated space for ROOT partition is invalid or too small."
-        echo "       EFI ends at ${EFI_END_OFFSET_MiB}MiB, Swap needs ${SWAP_SIZE_REQUESTED_MiB_INT}MiB, Total disk ${TOTAL_DISK_MiB_FOR_PARTED_INT}MiB."
+        echo "Error: Calculated space for ROOT partition is invalid or too small. Check disk size and requested swap/EFI sizes."
         exit 1
     fi
-    echo "LOG: Creating ROOT partition placeholder: Name='$ROOT_PART_GPT_NAME', Start='${ROOT_START_OFFSET_MiB}MiB', End='${ROOT_END_OFFSET_MiB}MiB'"
     log_sudo_cmd parted --script "$TARGET_DISK" unit MiB mkpart "$ROOT_PART_GPT_NAME" "$ROOT_START_OFFSET_MiB" "$ROOT_END_OFFSET_MiB"
-    echo "LOG: Setting ROOT partition type to 'Linux filesystem' (8300) for partition 2 using sgdisk..."
-    log_sudo_cmd sgdisk --typecode=2:8300 "$TARGET_DISK"
-    ROOT_DEVICE_NODE="${TARGET_DISK}2"
-    if [[ "$TARGET_DISK" == /dev/nvme* ]]; then ROOT_DEVICE_NODE="${TARGET_DISK}p2"; fi
-    echo "LOG: ROOT partition configured (intended as ${ROOT_DEVICE_NODE}). Current layout:"
+    log_sudo_cmd sgdisk --typecode=2:8300 "$TARGET_DISK" # 8300 = Linux filesystem
+
+    # 3. Swap Partition
+    SWAP_START_OFFSET_MiB="$ROOT_END_OFFSET_MiB"
+    log_sudo_cmd parted --script "$TARGET_DISK" unit MiB mkpart "$SWAP_PART_GPT_NAME" "$SWAP_START_OFFSET_MiB" 100%
+    log_sudo_cmd sgdisk --typecode=3:8200 "$TARGET_DISK" # 8200 = Linux swap
+
+    echo "LOG: All partition definitions and type codes have been set."
+    echo "LOG: Displaying partition layout BEFORE formatting."
+    echo "LOG: IMPORTANT: The 'File system' column shown by 'parted' below is based on the PARTITION TYPE CODES set."
+    echo "LOG:            It does NOT yet reflect actual formatted filesystems. Any pre-existing data or filesystem SIGNATURES"
+    echo "LOG:            on the disk WILL BE OVERWRITTEN in the next steps."
     sudo parted --script "$TARGET_DISK" print
     echo "-------------------------------------"
 
-    # 3. Swap Partition (will become ${TARGET_DISK}3 or ${TARGET_DISK}p3, in the remaining space at the end)
-    SWAP_START_OFFSET_MiB="$ROOT_END_OFFSET_MiB"
-    # End at 100% of disk (parted handles this for the last partition)
-    echo "LOG: Creating SWAP partition placeholder: Name='$SWAP_PART_GPT_NAME', Start='${SWAP_START_OFFSET_MiB}MiB', End='100%'"
-    log_sudo_cmd parted --script "$TARGET_DISK" unit MiB mkpart "$SWAP_PART_GPT_NAME" "$SWAP_START_OFFSET_MiB" 100%
-    echo "LOG: Setting SWAP partition type to 'Linux swap' (8200) for partition 3 using sgdisk..."
-    log_sudo_cmd sgdisk --typecode=3:8200 "$TARGET_DISK"
-    SWAP_DEVICE_NODE="${TARGET_DISK}3"
-    if [[ "$TARGET_DISK" == /dev/nvme* ]]; then SWAP_DEVICE_NODE="${TARGET_DISK}p3"; fi
-    echo "LOG: SWAP partition configured (intended as ${SWAP_DEVICE_NODE})."
-
-    echo "LOG: Final partition layout on $TARGET_DISK after setting type codes (using parted print):"
-    sudo parted --script "$TARGET_DISK" print
     echo "LOG: Informing kernel of partition table changes..."
-    log_sudo_cmd partprobe "$TARGET_DISK" && sleep 3 # Give kernel time to recognize changes.
+    log_sudo_cmd partprobe "$TARGET_DISK" && sleep 3
 
-    echo "LOG: Device nodes after partprobe and type code assignment:"
-    echo "LOG:   EFI Device:  $EFI_DEVICE_NODE (Type: EF00 - EFI System)"
-    echo "LOG:   ROOT Device: $ROOT_DEVICE_NODE (Type: 8300 - Linux filesystem)"
-    echo "LOG:   SWAP Device: $SWAP_DEVICE_NODE (Type: 8200 - Linux swap)"
-    echo "LOG: Note: Actual filesystem types and labels will be set by mkfs/mkswap commands next."
+    echo "LOG: Proceeding to format partitions. This will ERASE any data/signatures within these defined partitions."
+    echo "LOG:   - EFI Partition ($EFI_DEVICE_NODE, Name: $EFI_PART_NAME) will be formatted as FAT32."
+    echo "LOG:   - Root Partition ($ROOT_DEVICE_NODE, Name: $ROOT_PART_NAME) will be formatted as $DEFAULT_ROOT_FS_TYPE."
+    echo "LOG:   - Swap Partition ($SWAP_DEVICE_NODE, Name: $SWAP_PART_NAME) will be formatted as Linux Swap."
+    echo "LOG: Formatting commands will use force options to overwrite any existing filesystem signatures automatically."
 
-    echo "LOG: Formatting partitions and setting filesystem labels..."
-    echo "LOG: Formatting $EFI_DEVICE_NODE (EFI) as fat32, label: $EFI_PART_NAME"
+    echo "LOG: Formatting $EFI_DEVICE_NODE (EFI) as fat32, label: $EFI_PART_NAME..."
+    # mkfs.vfat usually overwrites without prompt.
     log_sudo_cmd mkfs.vfat -F 32 -n "$EFI_PART_NAME" "$EFI_DEVICE_NODE"
 
-    echo "LOG: Formatting $ROOT_DEVICE_NODE (ROOT) as $DEFAULT_ROOT_FS_TYPE, label: $ROOT_PART_NAME"
-    log_sudo_cmd mkfs."$DEFAULT_ROOT_FS_TYPE" -L "$ROOT_PART_NAME" "$ROOT_DEVICE_NODE"
+    echo "LOG: Formatting $ROOT_DEVICE_NODE (ROOT) as $DEFAULT_ROOT_FS_TYPE, label: $ROOT_PART_NAME (forcing overwrite)..."
+    log_sudo_cmd mkfs."$DEFAULT_ROOT_FS_TYPE" -F -L "$ROOT_PART_NAME" "$ROOT_DEVICE_NODE" # -F for ext2/3/4
 
-    echo "LOG: Creating SWAP filesystem on $SWAP_DEVICE_NODE (SWAP), label: $SWAP_PART_NAME"
-    log_sudo_cmd mkswap -L "$SWAP_PART_NAME" "$SWAP_DEVICE_NODE"
-    echo "LOG: Partitions formatted."
-    echo "LOG: Current layout after formatting (lsblk -fpo with PTTYPE,PARTTYPE to show GUIDs):"
+    echo "LOG: Creating SWAP filesystem on $SWAP_DEVICE_NODE (SWAP), label: $SWAP_PART_NAME (forcing overwrite)..."
+    log_sudo_cmd mkswap -f -L "$SWAP_PART_NAME" "$SWAP_DEVICE_NODE" # -f for mkswap
+
+    echo "LOG: Partitions have been formatted."
+    echo "LOG: Final check of disk layout AFTER formatting (lsblk shows actual FSTYPE and PARTTYPE GUIDs):"
     lsblk -fpo NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT,PARTLABEL,PTTYPE,PARTTYPE "$TARGET_DISK"
     echo "-------------------------------------"
 
     echo "LOG: Mounting filesystems..."
-    # Mount by LABEL for robustness, after labels have been set by mkfs commands
-    echo "LOG: Mounting ROOT by label $ROOT_PART_NAME to /mnt"
     log_sudo_cmd mount -L "$ROOT_PART_NAME" /mnt
     log_sudo_cmd mkdir -p /mnt/boot
-    echo "LOG: Mounting EFI device $EFI_DEVICE_NODE to /mnt/boot (label $EFI_PART_NAME)"
-    log_sudo_cmd mount "$EFI_DEVICE_NODE" /mnt/boot # EFI partition is often mounted by device node for simplicity here
-    echo "LOG: Activating SWAP by label $SWAP_PART_NAME"
+    log_sudo_cmd mount "$EFI_DEVICE_NODE" /mnt/boot
+    echo "LOG: Activating SWAP by label $SWAP_PART_NAME..."
     log_sudo_cmd swapon -L "$SWAP_PART_NAME"
-    echo "LOG: Filesystems mounted."
+    echo "LOG: Filesystems mounted and swap activated."
 
     echo "LOG: Current mount status and block device layout:"
     df -h /mnt /mnt/boot
     lsblk -fpo NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT,PARTLABEL,PTTYPE,PARTTYPE "$TARGET_DISK"
 
-} || { # Catch any error within the disk operations block.
+} || {
     echo "ERROR: A critical error occurred during disk operations."
     echo "Attempting to clean up mounts..."
-    # Safely try to unmount, errors ignored
-    sudo umount /mnt/boot &>/dev/null || true
-    sudo umount /mnt &>/dev/null || true
-    # Attempt to deactivate swap if a node was determined; actual node might vary if error was early
+    sudo umount -l /mnt/boot &>/dev/null || true # Use -l for lazy unmount if busy
+    sudo umount -l /mnt &>/dev/null || true
     if [[ -n "$SWAP_DEVICE_NODE" && -e "$SWAP_DEVICE_NODE" ]]; then
         sudo swapoff "$SWAP_DEVICE_NODE" &>/dev/null || true
     elif [[ -n "$SWAP_PART_NAME" ]]; then # Try by label if node is uncertain
@@ -313,7 +300,6 @@ fi
 }
 echo "Disk operations completed successfully."
 echo "--------------------------------------------------------------------"
-
 
 # --- 3. Generate hardware-configuration.nix ---
 echo "Step 3: Generating NixOS hardware configuration (hardware-configuration.nix)..."
