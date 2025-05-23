@@ -1,0 +1,28 @@
+# /templates/sound.nix.template
+#
+# Configures the sound system using PipeWire, which is the modern standard
+# for audio and video handling on Linux.
+{ pkgs, ... }: {
+
+  # Enable basic sound support in NixOS.
+  sound.enable = true;
+
+  # Explicitly disable PulseAudio, as PipeWire will provide a
+  # PulseAudio-compatible server. This avoids potential conflicts.
+  hardware.pulseaudio.enable = false;
+
+  # Enable RealtimeKit.
+  # This allows applications (like PipeWire) to request real-time scheduling
+  # priorities, which can significantly improve audio performance and reduce latency.
+  security.rtkit.enable = true;
+
+  # Enable PipeWire and its related services.
+  services.pipewire = {
+    enable = true;            # Enable the main PipeWire service.
+    alsa.enable = true;       # Provide ALSA compatibility (for applications that use ALSA directly).
+    alsa.support32Bit = true; # Enable ALSA support for 32-bit applications.
+    pulse.enable = true;      # Provide a PulseAudio compatible server, so PulseAudio apps work seamlessly.
+    # jack.enable = true;     # Uncomment if you need JACK Audio Connection Kit compatibility (e.g., for pro-audio apps).
+    # wireplumber.enable = true; # Session manager for PipeWire, usually enabled by default with pipewire.enable.
+  };
+}

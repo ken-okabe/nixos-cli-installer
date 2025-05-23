@@ -1,0 +1,44 @@
+# /templates/gnome-desktop.nix.template
+#
+# Configures the GNOME Desktop Environment and related graphical settings.
+{ pkgs, config, ... }: {
+
+  # Enable the Xorg server (or Wayland compositor backend)
+  # This is a general switch for graphical sessions.
+  services.xserver = {
+    enable = true;
+
+    # Enable GDM (GNOME Display Manager) as the login manager.
+    displayManager.gdm.enable = true;
+
+    # Enable libinput for modern input device handling (touchpads, mice, keyboards).
+    libinput.enable = true;
+  };
+
+  # Enable the GNOME desktop environment.
+  # This is the recommended way to enable GNOME and its core services.
+  programs.gnome.enable = true;
+
+  # Enable OpenGL and Vulkan support for graphics.
+  hardware.opengl = {
+    enable = true;
+    driSupport = true;        # Enable Direct Rendering Infrastructure (DRI) for 3D acceleration.
+    driSupport32Bit = true;   # Enable 32-bit DRI support for older applications/games.
+    # For AMD GPUs (like "vulkan-radeon" implies), Mesa drivers are typically used.
+    # These are usually enabled by default with hardware.opengl.enable.
+    # If specific drivers are needed, they can be specified:
+    # extraPackages = with pkgs; [ mesa.drivers ]; # Or more specific ones if necessary
+    # services.xserver.videoDrivers = [ "amdgpu" ]; # Usually auto-detected for AMD
+  };
+
+  # Environment variables can sometimes help with Wayland compatibility for certain apps.
+  # Most modern GNOME apps work well on Wayland by default.
+  # environment.sessionVariables = {
+  #   NIXOS_OZONE_WL = "1"; # Hint for some Electron apps to use Wayland.
+  #   MOZ_ENABLE_WAYLAND = "1"; # For Firefox Wayland mode (usually default now).
+  # };
+
+  # Note: GNOME Tweaks is installed via system-packages.nix.
+  # GNOME Shell Extensions will be handled post-installation.
+}
+

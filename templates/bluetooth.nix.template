@@ -1,0 +1,22 @@
+# /templates/bluetooth.nix.template
+#
+# Enables Bluetooth support on the system.
+{ pkgs, ... }: {
+
+  # Enable kernel support for Bluetooth hardware.
+  hardware.bluetooth.enable = true;
+
+  # Power on Bluetooth adapter on startup.
+  # hardware.bluetooth.powerOnBoot = true; # Optional, defaults to false.
+
+  # For GNOME, the necessary Bluetooth user interface components and services
+  # (like gnome-bluetooth) are typically pulled in automatically when
+  # `programs.gnome.enable = true;` is set in `gnome-desktop.nix`.
+  #
+  # If you find that Bluetooth management tools are missing, you might explicitly add
+  # `gnome-bluetooth-shell` or `gnome-bluetooth-libs` to `environment.systemPackages`
+  # or as a Home Manager package.
+  #
+  # `services.blueman.enable = true;` would enable the Blueman Bluetooth manager,
+  # but it's generally not needed or recommended if using GNOME's native Bluetooth integration.
+}

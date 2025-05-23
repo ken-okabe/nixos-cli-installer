@@ -1,0 +1,43 @@
+# /templates/system-packages.nix.template
+#
+# Defines essential system-wide packages that should be available to all users.
+# More specialized applications or user-specific tools are often managed
+# via other dedicated modules or Home Manager.
+{ pkgs, ... }: {
+
+  environment.systemPackages = with pkgs; [
+    # Core utilities
+    git       # Version control system (also configured per-user via Home Manager)
+
+    # Terminals & Multiplexers (installed system-wide, configured per-user via Home Manager)
+    alacritty # GPU-accelerated terminal emulator
+    zellij    # Terminal multiplexer
+
+    # GNOME specific tools
+    gnomeExtensions.extension-manager # To manage GNOME Shell Extensions
+    gnome-tweaks                      # For advanced GNOME settings customization
+    dconf-editor                      # Low-level configuration editor for dconf/GSettings
+
+    # Input Method Framework (core) - specific engines in ime-and-fonts.nix
+    fcitx5
+
+    # Media and Development
+    mpv          # Versatile media player
+    nodejs_20    # Node.js LTS (includes npm) - choose version as needed
+
+    # Utilities
+    webp-pixbuf-loader # For WebP image support in GTK/GNOME applications
+    tree               # Displays directory structures as a tree
+    bottom             # A graphical process/system monitor
+
+    # Add other essential CLI tools or system-wide utilities here.
+    # Examples:
+    # curl
+    # wget
+    # htop
+    # file
+    # which
+    # man-pages # For offline man pages
+    # man-db    # For `man` command itself and `mandb`
+  ];
+}

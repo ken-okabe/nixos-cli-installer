@@ -1,0 +1,53 @@
+# /templates/ime-and-fonts.nix.template
+#
+# Configures the Input Method Editor (IME) for Japanese input (Fcitx5 + Mozc)
+# and installs system-wide fonts.
+{ pkgs, lib, ... }: {
+
+  # 1. Japanese Input Method Editor (fcitx5 with Mozc)
+  i18n.inputMethod = {
+    enabled = "fcitx5"; # Enable Fcitx5 as the IME framework.
+    fcitx5.addons = with pkgs; [
+      fcitx5-mozc         # Mozc engine for Japanese input.
+      fcitx5-configtool   # GUI configuration tool for Fcitx5.
+      fcitx5-gtk          # GTK integration modules for Fcitx5.
+      fcitx5-qt           # Qt integration modules for Fcitx5.
+    ];
+  };
+
+  # 2. System-wide fonts installation
+  fonts.packages = with pkgs; [
+    # Essential CJK fonts for comprehensive Japanese character display.
+    noto-fonts-cjk-serif
+    noto-fonts-cjk-sans
+    noto-fonts-emoji    # For color emoji support.
+
+    # User-requested HackGen Nerd Font (version 2.9.0 from Nixpkgs).
+    hackgen-nf-font
+  ];
+
+  # 3. Fontconfig settings for default fonts
+  # This section defines which fonts are used by default for generic
+  # font families like 'serif', 'sans-serif', and 'monospace'.
+  fonts.fontconfig.defaultFonts = {
+    serif = [ "Noto Serif CJK JP" "Noto Color Emoji" ];       # Default serif font.
+    sansSerif = [ "Noto Sans CJK JP" "Noto Color Emoji" ];  # Default sans-serif font.
+    # Default monospace font, prioritizing HackGen Nerd Font.
+    # The exact Fontconfig name for "HackGen Nerd Font" (e.g., "HackGenNerd Console")
+    # should be verified after installation using `fc-list | grep HackGen`
+    # and updated here if necessary for precise matching.
+    monospace = [ "HackGenNerd Console" "Noto Color Emoji" ];
+    emoji = [ "Noto Color Emoji" ];                         # Default emoji font.
+  };
+
+  # 4. Environment variables for Fcitx5 IME integration
+  # These help applications (especially GTK and Qt ones) correctly discover
+  # and use Fcitx5 as the input method.
+  environment.sessionVariables = {
+    GTK_IM_MODULE = "fcitx";
+    QT_IM_MODULE = "fcitx";
+    XMODIFIERS = "@im=fcitx";
+    # INPUT_METHOD = "fcitx"; # Often covered by the above.
+    # SDL_IM_MODULE = "fcitx"; # For SDL applications if IME is needed.
+  };
+}

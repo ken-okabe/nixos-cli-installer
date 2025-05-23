@@ -1,0 +1,41 @@
+# /templates/system-settings.nix.template
+#
+# Configures basic system-wide settings such as time,
+# internationalization (i18n), and console behavior.
+{ lib, pkgs, ... }: {
+
+  # Timezone Configuration
+  # Sets the system's timezone. Replace with your desired timezone if different.
+  time.timeZone = "America/New_York";
+
+  # Internationalization (i18n) Settings
+  # Sets the default locale for the system.
+  i18n.defaultLocale = "en_US.UTF-8";
+
+  # You can specify additional locale settings if needed.
+  # i18n.extraLocaleSettings = {
+  #   LC_ADDRESS = "en_US.UTF-8";
+  #   LC_IDENTIFICATION = "en_US.UTF-8";
+  #   LC_MEASUREMENT = "en_US.UTF-8";
+  #   LC_MONETARY = "en_US.UTF-8";
+  #   LC_NAME = "en_US.UTF-8";
+  #   LC_NUMERIC = "en_US.UTF-8";
+  #   LC_PAPER = "en_US.UTF-8";
+  #   LC_TELEPHONE = "en_US.UTF-8";
+  #   LC_TIME = "en_US.UTF-8";
+  # };
+
+  # Console Settings
+  # Defines the keymap used in the TTY console.
+  console.keyMap = "us";
+  # You can also set a console font if desired:
+  # console.font = "Lat2-Terminus16";
+
+  # X11 Keyboard Layout
+  # Sets the default keyboard layout for X11 sessions.
+  # This is often also managed by the desktop environment.
+  services.xserver.layout = "us";
+  # services.xserver.xkbVariant = ""; # Specify if you use a particular variant, e.g., "dvorak"
+  # Example: Map Caps Lock to an additional Escape key.
+  # services.xserver.xkbOptions = "caps:escape";
+}

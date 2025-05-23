@@ -1,0 +1,37 @@
+# /templates/system-customizations.nix.template
+#
+# This module contains various system-level customizations, such as
+# kernel selection, Nix garbage collection settings, and package policies.
+{ pkgs, lib, config, ... }: {
+
+  # 1. Kernel Selection
+  # Use the Zen kernel, which is optimized for desktop/multimedia performance
+  # and responsiveness.
+  boot.kernelPackages = pkgs.linuxKernel.packages.linux_zen;
+
+  # 2. Nix Garbage Collection (GC) Configuration
+  # Configures automatic garbage collection to reclaim disk space.
+  nix.gc = {
+    automatic = true;          # Run garbage collection automatically.
+    dates = "weekly";          # How often to run (e.g., "daily", "weekly", "monthly", or specific cron expression).
+    options = "--delete-older-than 7d"; # Delete generations older than 7 days.
+                                       # Adjust "7d" (7 days) as needed (e.g., "30d" for 30 days).
+  };
+
+  # 3. Allow Unfree Packages
+  # Set this to true to allow the installation of packages with licenses
+  # that are not considered "free" by the FSF/Nixpkgs maintainers.
+  # This is required for software like Google Chrome, VSCode (Microsoft build), etc.
+  # By enabling this, you acknowledge and accept the terms of these licenses.
+  nixpkgs.config.allowUnfree = true;
+
+  # 4. Enable Flakes and new Nix command support system-wide.
+  # This ensures that the installed NixOS system itself is configured to use Flakes,
+  # which is essential for a Flake-managed setup.
+  nix.settings.experimental-features = [ "nix-command" "flakes" ];
+
+  # Optional: Optimize Nix store after builds.
+  # This can save some disk space by deduplicating identical files in the Nix store.
+  # It might slightly increase build times.
+  # nix.settings.auto-optimise-store = true;
+}
