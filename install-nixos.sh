@@ -125,7 +125,6 @@ while true; do
     fi
 done
 # Generate password hash using mkpasswd (available in NixOS live env).
-# The '-s' flag reads the password from stdin, which is more secure than command-line args.
 PASSWORD_HASH=$(echo -n "$pass1" | mkpasswd -m sha-512 -s)
 if [[ -z "$PASSWORD_HASH" || ! "$PASSWORD_HASH" == \$6\$* ]]; then # Basic check for $6$ hash format.
     echo "Error: Failed to generate password hash with mkpasswd. Ensure mkpasswd is available and working."
@@ -159,119 +158,82 @@ if ! confirm "Review the summary above. Do you want to proceed with these settin
 fi
 echo "--------------------------------------------------------------------"
 
-# --- 2. Disk Partitioning, Formatting, and Mounting (Precise Calculation Method as per final user spec) ---
+# --- 2. Disk Partitioning, Formatting, and Mounting (Using parted, EFI -> Root -> Swap order) ---
 echo "Step 2: Starting disk partitioning, formatting, and mounting on $TARGET_DISK..."
 echo "This will ERASE ALL DATA on $TARGET_DISK."
-if ! confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK?"; then
+if ! confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK with parted?"; then
     echo "Partitioning aborted by user."
     exit 1
 fi
 
 { # Start of disk operations block
-    echo "Wiping existing partition table on $TARGET_DISK..."
-    sudo sgdisk --zap-all "$TARGET_DISK"
-    sudo sgdisk --clear "$TARGET_DISK" # Create new GPT
-    echo "Disk wiped and new GPT created."
+    echo "Creating new GPT partition table on $TARGET_DISK..."
+    sudo parted --script "$TARGET_DISK" mklabel gpt
+    echo "GPT label created."
 
-    # Get disk information for calculations
-    SECTOR_SIZE_BYTES=$(sudo blockdev --getss "$TARGET_DISK")
-    if ! [[ "$SECTOR_SIZE_BYTES" =~ ^[0-9]+$ ]] || [ "$SECTOR_SIZE_BYTES" -le 0 ]; then
-        echo "Error: Could not determine sector size for $TARGET_DISK. Assuming 512."
-        SECTOR_SIZE_BYTES=512
-    fi
-    echo "Disk Sector Size: ${SECTOR_SIZE_BYTES} bytes"
-
-    disk_info_sgdisk=$(sudo sgdisk --print "$TARGET_DISK" 2>&1)
-    FIRST_USABLE_SECTOR=$(echo "$disk_info_sgdisk" | awk '/^First usable sector is/{print $5}')
-    LAST_USABLE_SECTOR=$(echo "$disk_info_sgdisk" | awk '/^Last usable sector is/{print $5}')
-
-    if ! [[ "$FIRST_USABLE_SECTOR" =~ ^[0-9]+$ ]] || ! [[ "$LAST_USABLE_SECTOR" =~ ^[0-9]+$ ]]; then
-        echo "Error: Could not parse usable sector range from sgdisk output for $TARGET_DISK."
-        sgdisk_output_for_debug=$(sudo sgdisk --print "$TARGET_DISK" 2>&1)
-        echo "sgdisk output was: $sgdisk_output_for_debug"
+    # Get total disk size in MiB for calculations
+    TOTAL_DISK_MiB_FOR_PARTED_FLOAT=$(sudo parted --script "$TARGET_DISK" unit MiB print | awk '/^Disk \/dev\// {gsub(/MiB/,""); print $3}')
+    if ! [[ "$TOTAL_DISK_MiB_FOR_PARTED_FLOAT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        echo "Error: Could not determine total disk size in MiB for $TARGET_DISK."
         exit 1
     fi
-    echo "First Usable Sector: $FIRST_USABLE_SECTOR, Last Usable Sector: $LAST_USABLE_SECTOR"
+    TOTAL_DISK_MiB_FOR_PARTED_INT=$(printf "%.0f" "$TOTAL_DISK_MiB_FOR_PARTED_FLOAT") # Round to nearest integer for bash calculations
+    echo "Total disk size (for parted calculations): ${TOTAL_DISK_MiB_FOR_PARTED_INT}MiB"
 
-    # --- Create Partitions in sequence: EFI (1), then Root (2), then Swap (3) ---
+    # Convert SWAP GiB to MiB for parted calculations
+    SWAP_SIZE_REQUESTED_MiB_INT=$((SWAP_SIZE_GB * 1024))
 
-    # 1. EFI Partition
-    EFI_PART_START_SECTOR="$FIRST_USABLE_SECTOR"
-    EFI_PART_SIZE_SGDISK="+${DEFAULT_EFI_SIZE_MiB}M"
-    echo "Creating EFI partition (number 1, start: ${EFI_PART_START_SECTOR}, size: ${DEFAULT_EFI_SIZE_MiB}MiB)..."
-    sudo sgdisk --new=1:${EFI_PART_START_SECTOR}:${EFI_PART_SIZE_SGDISK} --typecode=1:ef00 --change-name=1:"$EFI_PART_NAME" "$TARGET_DISK"
-    PART1_LAST_SECTOR=$(sudo sgdisk --info=1 "$TARGET_DISK" | awk '/^Last sector:/{print $3; exit}')
-    echo "EFI partition created, ending at sector $PART1_LAST_SECTOR."
-    sudo sgdisk -p "$TARGET_DISK"
+    # 1. Create EFI Partition (physical first)
+    EFI_START_OFFSET_MiB="1" # Standard starting offset for alignment
+    EFI_END_OFFSET_MiB="$((EFI_START_OFFSET_MiB + DEFAULT_EFI_SIZE_MiB))"
+    echo "Creating EFI partition (from ${EFI_START_OFFSET_MiB}MiB to ${EFI_END_OFFSET_MiB}MiB)..."
+    sudo parted --script "$TARGET_DISK" unit MiB mkpart "$EFI_PART_NAME" fat32 "$EFI_START_OFFSET_MiB" "$EFI_END_OFFSET_MiB"
+    sudo parted --script "$TARGET_DISK" set 1 esp on # Set ESP flag (boot flag for GPT)
+    EFI_DEVICE_NODE="${TARGET_DISK}1" # Kernel will likely name this sda1, etc.
+    echo "EFI partition created as ${EFI_DEVICE_NODE}."
 
-    # 2. Root Partition
-    # Calculate size to leave for SWAP at the end.
-    SWAP_SIZE_BYTES_REQUESTED=$((SWAP_SIZE_GB * 1024 * 1024 * 1024))
-    SWAP_SIZE_SECTORS_REQUESTED=$((SWAP_SIZE_BYTES_REQUESTED / SECTOR_SIZE_BYTES))
-
-    ROOT_PART_START_SECTOR=$((PART1_LAST_SECTOR + 1))
-    # Ensure Root ends such that SWAP_SIZE_SECTORS_REQUESTED are left before LAST_USABLE_SECTOR.
-    ROOT_PART_END_SECTOR=$((LAST_USABLE_SECTOR - SWAP_SIZE_SECTORS_REQUESTED))
-
-    if [ "$ROOT_PART_END_SECTOR" -le "$ROOT_PART_START_SECTOR" ]; then
-        echo "Error: Not enough space for ROOT partition after reserving for EFI and SWAP."
+    # 2. Root Partition (physical second)
+    ROOT_START_OFFSET_MiB="$EFI_END_OFFSET_MiB"
+    # Calculate where Root should end to leave space for Swap
+    ROOT_END_OFFSET_MiB="$((TOTAL_DISK_MiB_FOR_PARTED_INT - SWAP_SIZE_REQUESTED_MiB_INT))"
+    if [ "$ROOT_START_OFFSET_MiB" -ge "$ROOT_END_OFFSET_MiB" ]; then # Use integer comparison
+        echo "Error: Calculated space for ROOT partition is invalid or too small."
+        echo "       EFI ends at ${EFI_END_OFFSET_MiB}MiB, Swap needs ${SWAP_SIZE_REQUESTED_MiB_INT}MiB, Total ${TOTAL_DISK_MiB_FOR_PARTED_INT}MiB."
         exit 1
     fi
-    echo "Creating ROOT partition (number 2, start: $ROOT_PART_START_SECTOR, end: $ROOT_PART_END_SECTOR)..."
-    sudo sgdisk --new=2:${ROOT_PART_START_SECTOR}:${ROOT_PART_END_SECTOR} --typecode=2:8300 --change-name=2:"$ROOT_PART_NAME" "$TARGET_DISK"
-    PART2_LAST_SECTOR=$(sudo sgdisk --info=2 "$TARGET_DISK" | awk '/^Last sector:/{print $3; exit}')
-    echo "ROOT partition created, ending at sector $PART2_LAST_SECTOR."
-    sudo sgdisk -p "$TARGET_DISK"
+    echo "Creating ROOT partition (from ${ROOT_START_OFFSET_MiB}MiB to ${ROOT_END_OFFSET_MiB}MiB)..."
+    sudo parted --script "$TARGET_DISK" unit MiB mkpart "$ROOT_PART_NAME" "$DEFAULT_ROOT_FS_TYPE" "$ROOT_START_OFFSET_MiB" "$ROOT_END_OFFSET_MiB"
+    ROOT_DEVICE_NODE="${TARGET_DISK}2" # Kernel will likely name this sda2, etc.
+    echo "ROOT partition created as ${ROOT_DEVICE_NODE}."
 
-    # 3. Swap Partition (in the remaining space at the end)
-    SWAP_PART_START_SECTOR=$((PART2_LAST_SECTOR + 1))
-    echo "Creating SWAP partition (number 3, start: $SWAP_PART_START_SECTOR, end: $LAST_USABLE_SECTOR)..."
-    if [ "$SWAP_PART_START_SECTOR" -gt "$LAST_USABLE_SECTOR" ]; then
-        echo "Warning: No significant space left for SWAP partition. It might be very small or fail to create."
-        # If this happens, the calculation for ROOT_PART_END_SECTOR was too aggressive or disk too small.
-    fi
-    sudo sgdisk --new=3:${SWAP_PART_START_SECTOR}:${LAST_USABLE_SECTOR} --typecode=3:8200 --change-name=3:"$SWAP_PART_NAME" "$TARGET_DISK"
-    echo "SWAP partition created."
+    # 3. Swap Partition (physical third, in the remaining space at the end)
+    SWAP_START_OFFSET_MiB="$ROOT_END_OFFSET_MiB"
+    # End at 100% of disk (parted handles this for the last partition)
+    echo "Creating SWAP partition (from ${SWAP_START_OFFSET_MiB}MiB to 100%)..."
+    sudo parted --script "$TARGET_DISK" unit MiB mkpart "$SWAP_PART_NAME" linux-swap "$SWAP_START_OFFSET_MiB" 100%
+    SWAP_DEVICE_NODE="${TARGET_DISK}3" # Kernel will likely name this sda3, etc.
+    echo "SWAP partition created as ${SWAP_DEVICE_NODE}."
 
-    echo "Final partition layout on $TARGET_DISK:"
-    sudo sgdisk -v "$TARGET_DISK" # Verify disk integrity
-    sudo sgdisk -p "$TARGET_DISK" # Print final layout
-
+    echo "Final partition layout on $TARGET_DISK (using parted print):"
+    sudo parted --script "$TARGET_DISK" print
     echo "Informing kernel of partition table changes..."
-    sudo partprobe "$TARGET_DISK" && sleep 3
+    sudo partprobe "$TARGET_DISK" && sleep 3 # Give kernel time to recognize changes.
 
-    # Verify that partlabels are accessible
-    echo "Verifying partition labels are accessible..."
-    # Increased robustness for label verification
-    label_wait_count=0
-    while true; do
-        if [ -e "/dev/disk/by-partlabel/$EFI_PART_NAME" ] && \
-           [ -e "/dev/disk/by-partlabel/$ROOT_PART_NAME" ] && \
-           [ -e "/dev/disk/by-partlabel/$SWAP_PART_NAME" ]; then
-            echo "All partition labels successfully verified."
-            break
-        fi
-        label_wait_count=$((label_wait_count + 1))
-        if [ "$label_wait_count" -gt 5 ]; then # Wait up to 5*2 = 10 seconds
-            echo "ERROR: Timeout waiting for partition labels to appear under /dev/disk/by-partlabel/."
-            ls -l /dev/disk/by-partlabel/ || echo "(No labels found or ls error)"
-            echo "       Please check partition creation and naming. Aborting."
-            exit 1
-        fi
-        echo "Waiting for labels to appear (attempt ${label_wait_count})..."
-        sleep 2
-    done
-
-    echo "Formatting partitions using labels..."
-    sudo mkfs.vfat -F 32 -n "$EFI_PART_NAME" "/dev/disk/by-partlabel/$EFI_PART_NAME"
-    sudo mkfs.ext4 -L "$ROOT_PART_NAME" "/dev/disk/by-partlabel/$ROOT_PART_NAME"
-    sudo mkswap -L "$SWAP_PART_NAME" "/dev/disk/by-partlabel/$SWAP_PART_NAME"
+    echo "Formatting partitions..."
+    # We will use the device nodes derived from partition order for formatting,
+    # and set filesystem labels with mkfs.
+    sudo mkfs.vfat -F 32 -n "$EFI_PART_NAME" "$EFI_DEVICE_NODE"
+    sudo mkfs."$DEFAULT_ROOT_FS_TYPE" -L "$ROOT_PART_NAME" "$ROOT_DEVICE_NODE"
+    sudo mkswap -L "$SWAP_PART_NAME" "$SWAP_DEVICE_NODE"
     echo "Partitions formatted."
 
-    echo "Mounting filesystems to /mnt..."
+    echo "Mounting filesystems..."
+    # Mount by label, which were set during mkfs.
     sudo mount -L "$ROOT_PART_NAME" /mnt
     sudo mkdir -p /mnt/boot
-    sudo mount -L "$EFI_PART_NAME" /mnt/boot
+    # For EFI, some prefer mounting by device or UUID, but label should also work if set by mkfs.vfat.
+    # If mkfs.vfat -n doesn't create a /dev/disk/by-label entry reliably, use $EFI_DEVICE_NODE.
+    sudo mount "$EFI_DEVICE_NODE" /mnt/boot
     sudo swapon -L "$SWAP_PART_NAME"
     echo "Filesystems mounted."
 
@@ -315,8 +277,11 @@ generate_from_template() {
     fi
 
     local sed_script=""
+    # Using | as sed delimiter to avoid issues if paths/hashes contain /
     sed_script+="-e \"s|__NIXOS_USERNAME__|${NIXOS_USERNAME}|g\" "
-    sed_script+="-e \"s|__PASSWORD_HASH__|${PASSWORD_HASH}|g\" " # Ensure hash special characters are handled by sed if not using |
+    # For PASSWORD_HASH, ensure it doesn't contain the sed delimiter itself, or escape it.
+    # Since mkpasswd $6$ format doesn't usually contain '|', this should be safe.
+    sed_script+="-e \"s|__PASSWORD_HASH__|${PASSWORD_HASH}|g\" "
     sed_script+="-e \"s|__GIT_USERNAME__|${GIT_USERNAME}|g\" "
     sed_script+="-e \"s|__GIT_USEREMAIL__|${GIT_USEREMAIL}|g\" "
     sed_script+="-e \"s|__HOSTNAME__|${HOSTNAME}|g\" "
@@ -324,14 +289,6 @@ generate_from_template() {
 
     local temp_output
     temp_output=$(mktemp)
-
-    # Use printf to handle potential special characters in PASSWORD_HASH for sed
-    # This is complex. A simpler sed might work if hash doesn't contain sed delimiters.
-    # For now, assuming simple sed with | delimiter (as in flake.nix template) is okay
-    # if PASSWORD_HASH doesn't contain |. If it does, this needs more robust escaping.
-    # A safer way: use awk or perl for templating, or pass vars as env vars to a nix expression.
-    # Given the context, let's keep sed but be mindful.
-    # The hash usually contains '$', which is fine. If it contains '/', then '|' as delimiter is good.
 
     if command sudo sed "${sed_script}" "${template_path}" > "${temp_output}"; then
         if sudo mv "$temp_output" "$output_path"; then
