@@ -11,22 +11,50 @@ USER_CONFIG_FILES_DIR="${SCRIPT_DIR}/templates/config" # For user-provided Zelli
 TARGET_NIXOS_CONFIG_DIR="/mnt/etc/nixos"                # NixOS config on the target mount
 
 # === Function Definitions ===
+# Usage: confirm "Your question" DEFAULT_RESPONSE_CHAR (Y or N)
+# Returns 0 (true) if confirmed (user inputs 'y' or 'yes', or Enter if default is 'Y').
+# Loops indefinitely asking again if user inputs 'n' or 'no', or Enter if default is 'N'.
+# User can abort with Ctrl+C.
 confirm() {
-    # Prompts the user for a yes/no confirmation.
-    # Usage: confirm "Your question"
-    # Returns 0 (true for bash conditional) for yes, 1 (false for bash conditional) for no.
+    local question="$1"
+    local default_response_char="$2" # Should be "Y" or "N"
+    local prompt_display=""
+
+    if [[ "$default_response_char" == "Y" ]]; then
+        prompt_display="[Y/n]"
+    elif [[ "$default_response_char" == "N" ]]; then
+        prompt_display="[y/N]"
+    else
+        # This case should ideally not be reached if the function is called correctly.
+        # Output to stderr and fallback to a safer default.
+        echo "DEVELOPER ERROR: confirm function called with invalid default_response_char: '$default_response_char'. Assuming 'N'." >&2
+        prompt_display="[y/N]"
+        default_response_char="N" # Fallback to 'N' to be safe
+    fi
+
     while true; do
-        read -r -p "$1 [y/N]: " response
-        case "$response" in
-            [yY][eE][sS]|[yY]) # Match 'y', 'Y', 'yes', 'YES', 'Yes'
-                return 0 # Indicates success (true in shell scripting conditional tests)
+        read -r -p "${question} ${prompt_display}: " response
+        local response_lower
+        response_lower=$(echo "$response" | tr '[:upper:]' '[:lower:]')
+
+        case "$response_lower" in
+            y|yes)
+                return 0 # User explicitly confirmed
                 ;;
-            [nN][oO]|[nN]|"")  # Match 'n', 'N', 'no', 'NO', 'No', or an empty string (Enter key)
-                return 1 # Indicates failure (false in shell scripting conditional tests)
+            n|no)
+                echo "You selected 'No'. Asking again. Press Ctrl+C to abort script."
+                # Loop continues, re-prompting
+                ;;
+            "") # Enter key pressed
+                if [[ "$default_response_char" == "Y" ]]; then
+                    return 0 # Default to Yes
+                else # default_response_char == "N"
+                    echo "Default is 'No' (Enter pressed). Asking again. Press Ctrl+C to abort script."
+                    # Loop continues, re-prompting
+                fi
                 ;;
             *)
-                # Invalid input, prompt again
-                echo "Invalid input. Please enter 'y' or 'n'."
+                echo "Invalid input. Please type 'y' (yes) or 'n' (no), or press Enter for the default action."
                 ;;
         esac
     done
@@ -58,10 +86,8 @@ echo "           1. Back up any important data."
 echo "           2. Detach any unnecessary disks or media before proceeding."
 echo "           3. Carefully verify the target disk when prompted."
 echo "--------------------------------------------------------------------"
-if ! confirm "Do you understand these warnings and accept full responsibility for proceeding?"; then
-    echo "Installation aborted by user."
-    exit 1
-fi
+confirm "Do you understand these warnings and accept full responsibility for proceeding?" "N"
+# Script proceeds only if user types 'y'. Otherwise, loops here until Ctrl+C.
 echo "--------------------------------------------------------------------"
 
 # --- 1. Gather Information Interactively ---
@@ -74,11 +100,9 @@ echo ""
 while true; do
     read -r -p "Enter the target disk for NixOS installation (e.g., /dev/sda, /dev/nvme0n1): " TARGET_DISK
     if [[ -b "$TARGET_DISK" ]]; then # Check if it's a block device.
-        if confirm "You have selected '$TARGET_DISK'. ALL DATA ON THIS DISK WILL BE ERASED! Are you absolutely sure?"; then
-            break
-        else
-            echo "Target disk selection cancelled. Please enter a different disk or abort."
-        fi
+        TARGET_DISK_PROMPT="You have selected '$TARGET_DISK'. ALL DATA ON THIS DISK WILL BE ERASED! Are you absolutely sure?"
+        confirm "$TARGET_DISK_PROMPT" "N" # Loops until 'y' is pressed. Ctrl+C to abort.
+        break # Exit while loop once user explicitly confirms with 'y'.
     else
         echo "Error: '$TARGET_DISK' is not a valid block device. Please try again."
     fi
@@ -87,13 +111,13 @@ echo "LOG: TARGET_DISK set to: $TARGET_DISK"
 
 
 # 1.2. Partitioning Constants
-SWAP_SIZE_GB="16" # Fixed to 16GiB as per user request
-DEFAULT_EFI_SIZE_MiB="512"  # Size for EFI in MiB
+SWAP_SIZE_GB="16"
+DEFAULT_EFI_SIZE_MiB="512"
 
-EFI_PART_NAME="EFI"         # Filesystem Label for the EFI partition
-SWAP_PART_NAME="SWAP"       # Filesystem Label for the Swap partition
-ROOT_PART_NAME="ROOT_NIXOS" # Filesystem Label for the Root partition
-DEFAULT_ROOT_FS_TYPE="ext4" # Filesystem type for Root
+EFI_PART_NAME="EFI"
+SWAP_PART_NAME="SWAP"
+ROOT_PART_NAME="ROOT_NIXOS"
+DEFAULT_ROOT_FS_TYPE="ext4"
 echo "LOG: SWAP_SIZE_GB=${SWAP_SIZE_GB}, DEFAULT_EFI_SIZE_MiB=${DEFAULT_EFI_SIZE_MiB}"
 echo "LOG: EFI_PART_NAME=${EFI_PART_NAME}, SWAP_PART_NAME=${SWAP_PART_NAME}, ROOT_PART_NAME=${ROOT_PART_NAME}, DEFAULT_ROOT_FS_TYPE=${DEFAULT_ROOT_FS_TYPE}"
 
@@ -121,21 +145,20 @@ while true; do
         if [[ -z "$pass1" ]]; then
             echo "Error: Password cannot be empty. Please try again."
         else
-            break # Passwords match and are not empty.
+            break
         fi
     else
         echo "Error: Passwords do not match. Please try again."
     fi
 done
-# Generate password hash using mkpasswd (available in NixOS live env).
 PASSWORD_HASH=$(echo -n "$pass1" | mkpasswd -m sha-512 -s)
-if [[ -z "$PASSWORD_HASH" || ! "$PASSWORD_HASH" == \$6\$* ]]; then # Basic check for $6$ hash format.
+if [[ -z "$PASSWORD_HASH" || ! "$PASSWORD_HASH" == \$6\$* ]]; then
     echo "Error: Failed to generate password hash with mkpasswd. Ensure mkpasswd is available and working."
     exit 1
 fi
-unset pass1 # Clear plaintext password variables for security.
+unset pass1
 unset pass2
-echo "LOG: Password hash generated." # Do not log the hash itself
+echo "LOG: Password hash generated."
 
 # 1.5. Git User Information (distinct from system user)
 echo ""
@@ -152,9 +175,9 @@ echo "LOG: GIT_USEREMAIL set to: $GIT_USEREMAIL"
 
 # 1.6. Hostname
 echo ""
-DEFAULT_HOSTNAME="nixos" # This should match the key in nixosConfigurations in flake.nix
+DEFAULT_HOSTNAME="nixos"
 read -r -p "Enter the system hostname (default: ${DEFAULT_HOSTNAME}): " HOSTNAME
-HOSTNAME=${HOSTNAME:-$DEFAULT_HOSTNAME} # Use default if input is empty.
+HOSTNAME=${HOSTNAME:-$DEFAULT_HOSTNAME}
 echo "LOG: HOSTNAME set to: $HOSTNAME"
 
 echo "--------------------------------------------------------------------"
@@ -169,33 +192,28 @@ echo "  Git Email:          $GIT_USEREMAIL"
 echo "  Hostname:           $HOSTNAME"
 echo "  Password Hash:      (Generated, not displayed for security)"
 echo ""
-if ! confirm "Review the summary above. Do you want to proceed with these settings?"; then
-    echo "Installation aborted by user."
-    exit 1
-fi
+confirm "Review the summary above. Do you want to proceed with these settings?" "Y"
+# Loops if 'n' is pressed. Proceeds if 'y' or Enter (default Y) is pressed. Ctrl+C to abort.
 echo "--------------------------------------------------------------------"
 
 # --- 2. Disk Partitioning, Formatting, and Mounting (Using parted for layout, sgdisk for typecodes, EFI -> Root -> Swap physical order) ---
 echo "Step 2: Starting disk partitioning, formatting, and mounting on $TARGET_DISK..."
 echo "This will ERASE ALL DATA on $TARGET_DISK."
-if ! confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK?"; then
-    echo "Partitioning aborted by user."
-    exit 1
-fi
+confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK?" "N"
+# Loops if 'n' or Enter (default N) is pressed. Proceeds if 'y' is pressed. Ctrl+C to abort.
 
 { # Start of disk operations block
     echo "LOG: Creating new GPT partition table on $TARGET_DISK..."
     log_sudo_cmd parted --script "$TARGET_DISK" mklabel gpt
     echo "LOG: New GPT partition table created. Disk is now logically empty of partitions."
     echo "LOG: Current disk state (should show an empty GPT table or no partitions):"
-    sudo parted --script "$TARGET_DISK" print # Shows the disk after mklabel
+    sudo parted --script "$TARGET_DISK" print
     echo "-------------------------------------"
 
-    # Get total disk size in MiB for calculations
     TOTAL_DISK_MiB_FOR_PARTED_FLOAT=$(sudo parted --script "$TARGET_DISK" unit MiB print | awk '/^Disk \// {gsub(/MiB/,""); print $3}')
     if ! [[ "$TOTAL_DISK_MiB_FOR_PARTED_FLOAT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         echo "Error: Could not determine total disk size in MiB for $TARGET_DISK from parted."
-        sudo parted --script "$TARGET_DISK" unit MiB print # Print for debugging
+        sudo parted --script "$TARGET_DISK" unit MiB print
         exit 1
     fi
     TOTAL_DISK_MiB_FOR_PARTED_INT=$(printf "%.0f" "$TOTAL_DISK_MiB_FOR_PARTED_FLOAT")
@@ -204,12 +222,10 @@ fi
     SWAP_SIZE_REQUESTED_MiB_INT=$((SWAP_SIZE_GB * 1024))
     echo "LOG: Requested EFI Size: ${DEFAULT_EFI_SIZE_MiB}MiB, Requested SWAP Size: ${SWAP_SIZE_REQUESTED_MiB_INT}MiB"
 
-    # GPT Partition Names
     EFI_PART_GPT_NAME="$EFI_PART_NAME"
     ROOT_PART_GPT_NAME="$ROOT_PART_NAME"
     SWAP_PART_GPT_NAME="$SWAP_PART_NAME"
 
-    # Define partition device node suffixes (e.g., '1' or 'p1')
     PART_SUFFIX_1="1"; PART_SUFFIX_2="2"; PART_SUFFIX_3="3"
     if [[ "$TARGET_DISK" == /dev/nvme* ]]; then
         PART_SUFFIX_1="p1"; PART_SUFFIX_2="p2"; PART_SUFFIX_3="p3"
@@ -219,14 +235,12 @@ fi
     SWAP_DEVICE_NODE="${TARGET_DISK}${PART_SUFFIX_3}"
 
     echo "LOG: Defining partition structure (EFI, Root, Swap)..."
-    # 1. EFI Partition
     EFI_START_OFFSET_MiB="1"
     EFI_END_OFFSET_MiB="$((EFI_START_OFFSET_MiB + DEFAULT_EFI_SIZE_MiB))"
     log_sudo_cmd parted --script "$TARGET_DISK" unit MiB mkpart "$EFI_PART_GPT_NAME" "$EFI_START_OFFSET_MiB" "$EFI_END_OFFSET_MiB"
-    log_sudo_cmd sgdisk --typecode=1:EF00 "$TARGET_DISK" # EF00 = EFI System
+    log_sudo_cmd sgdisk --typecode=1:EF00 "$TARGET_DISK"
     log_sudo_cmd parted --script "$TARGET_DISK" set 1 esp on
 
-    # 2. Root Partition
     ROOT_START_OFFSET_MiB="$EFI_END_OFFSET_MiB"
     ROOT_END_OFFSET_MiB="$((TOTAL_DISK_MiB_FOR_PARTED_INT - SWAP_SIZE_REQUESTED_MiB_INT))"
     if [ "$(printf "%.0f" "$ROOT_START_OFFSET_MiB")" -ge "$(printf "%.0f" "$ROOT_END_OFFSET_MiB")" ]; then
@@ -234,12 +248,11 @@ fi
         exit 1
     fi
     log_sudo_cmd parted --script "$TARGET_DISK" unit MiB mkpart "$ROOT_PART_GPT_NAME" "$ROOT_START_OFFSET_MiB" "$ROOT_END_OFFSET_MiB"
-    log_sudo_cmd sgdisk --typecode=2:8300 "$TARGET_DISK" # 8300 = Linux filesystem
+    log_sudo_cmd sgdisk --typecode=2:8300 "$TARGET_DISK"
 
-    # 3. Swap Partition
     SWAP_START_OFFSET_MiB="$ROOT_END_OFFSET_MiB"
     log_sudo_cmd parted --script "$TARGET_DISK" unit MiB mkpart "$SWAP_PART_GPT_NAME" "$SWAP_START_OFFSET_MiB" 100%
-    log_sudo_cmd sgdisk --typecode=3:8200 "$TARGET_DISK" # 8200 = Linux swap
+    log_sudo_cmd sgdisk --typecode=3:8200 "$TARGET_DISK"
 
     echo "LOG: All partition definitions and type codes have been set."
     echo "LOG: Displaying partition layout BEFORE formatting."
@@ -259,14 +272,13 @@ fi
     echo "LOG: Formatting commands will use force options to overwrite any existing filesystem signatures automatically."
 
     echo "LOG: Formatting $EFI_DEVICE_NODE (EFI) as fat32, label: $EFI_PART_NAME..."
-    # mkfs.vfat usually overwrites without prompt.
     log_sudo_cmd mkfs.vfat -F 32 -n "$EFI_PART_NAME" "$EFI_DEVICE_NODE"
 
     echo "LOG: Formatting $ROOT_DEVICE_NODE (ROOT) as $DEFAULT_ROOT_FS_TYPE, label: $ROOT_PART_NAME (forcing overwrite)..."
-    log_sudo_cmd mkfs."$DEFAULT_ROOT_FS_TYPE" -F -L "$ROOT_PART_NAME" "$ROOT_DEVICE_NODE" # -F for ext2/3/4
+    log_sudo_cmd mkfs."$DEFAULT_ROOT_FS_TYPE" -F -L "$ROOT_PART_NAME" "$ROOT_DEVICE_NODE"
 
     echo "LOG: Creating SWAP filesystem on $SWAP_DEVICE_NODE (SWAP), label: $SWAP_PART_NAME (forcing overwrite)..."
-    log_sudo_cmd mkswap -f -L "$SWAP_PART_NAME" "$SWAP_DEVICE_NODE" # -f for mkswap
+    log_sudo_cmd mkswap -f -L "$SWAP_PART_NAME" "$SWAP_DEVICE_NODE"
 
     echo "LOG: Partitions have been formatted."
     echo "LOG: Final check of disk layout AFTER formatting (lsblk shows actual FSTYPE and PARTTYPE GUIDs):"
@@ -288,11 +300,11 @@ fi
 } || {
     echo "ERROR: A critical error occurred during disk operations."
     echo "Attempting to clean up mounts..."
-    sudo umount -l /mnt/boot &>/dev/null || true # Use -l for lazy unmount if busy
+    sudo umount -l /mnt/boot &>/dev/null || true
     sudo umount -l /mnt &>/dev/null || true
     if [[ -n "$SWAP_DEVICE_NODE" && -e "$SWAP_DEVICE_NODE" ]]; then
         sudo swapoff "$SWAP_DEVICE_NODE" &>/dev/null || true
-    elif [[ -n "$SWAP_PART_NAME" ]]; then # Try by label if node is uncertain
+    elif [[ -n "$SWAP_PART_NAME" ]]; then
         sudo swapoff -L "$SWAP_PART_NAME" &>/dev/null || true
     fi
     echo "Examine logs above for details. You may need to manually clean up ${TARGET_DISK}."
@@ -424,26 +436,23 @@ echo "Step 5: Installing NixOS using the Flake configuration..."
 echo "This process will take a significant amount of time. Please be patient."
 echo "You will see a lot of build output."
 echo ""
-if confirm "Proceed with NixOS installation?"; then
-    echo "LOG: Starting nixos-install --no-root-passwd --flake ${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}"
-    # The actual installation command.
-    if sudo nixos-install --no-root-passwd --flake "${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}"; then
-        echo ""
-        echo "--------------------------------------------------------------------"
-        echo "NixOS installation completed successfully!"
-        echo "You can now reboot your system."
-        echo "To reboot, run: sudo reboot"
-        echo "--------------------------------------------------------------------"
-    else
-        echo "ERROR: nixos-install failed. Please check the output above for errors."
-        echo "The system filesystems are still mounted at /mnt."
-        echo "You can investigate files in ${TARGET_NIXOS_CONFIG_DIR} or try installation steps again."
-        exit 1
-    fi
+confirm "Proceed with NixOS installation?" "Y"
+# Loops if 'n' is pressed. Proceeds if 'y' or Enter (default Y) is pressed. Ctrl+C to abort.
+
+echo "LOG: Starting nixos-install --no-root-passwd --flake ${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}"
+# The actual installation command.
+if sudo nixos-install --no-root-passwd --flake "${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}"; then
+    echo ""
+    echo "--------------------------------------------------------------------"
+    echo "NixOS installation completed successfully!"
+    echo "You can now reboot your system."
+    echo "To reboot, run: sudo reboot"
+    echo "--------------------------------------------------------------------"
 else
-    echo "Installation aborted by user before final nixos-install step."
-    echo "Filesystems are still mounted at /mnt. You can inspect or modify files in ${TARGET_NIXOS_CONFIG_DIR}"
-    echo "and then run 'sudo nixos-install --no-root-passwd --flake ${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}' manually if desired."
+    echo "ERROR: nixos-install failed. Please check the output above for errors."
+    echo "The system filesystems are still mounted at /mnt."
+    echo "You can investigate files in ${TARGET_NIXOS_CONFIG_DIR} or try installation steps again."
+    exit 1
 fi
 
 echo "===================================================================="
