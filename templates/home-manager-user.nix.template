@@ -2,21 +2,18 @@
 #
 # Home Manager configuration for the primary user.
 # This file manages user-specific dotfiles, applications, and services.
-{ pkgs, lib, config, inputs, ... }:
+{ pkgs, lib, config, inputs, specialArgs, ... }: # MODIFIED: Added specialArgs to function arguments
 
 let
-  # Username, Git username, and Git email are passed via specialArgs from flake.nix
-  # The 'username' here refers to the system username, used for home.username and home.homeDirectory.
-  # The 'gitUsername' and 'gitUseremail' are specifically for Git configuration.
-  username = config.specialArgs.username;
-  gitUsername = config.specialArgs.gitUsername;
-  gitUseremail = config.specialArgs.gitUseremail;
-  hostname = config.specialArgs.hostname;
+  # MODIFIED: Accessing specialArgs directly from the function arguments
+  username = specialArgs.username;
+  gitUsername = specialArgs.gitUsername;
+  gitUseremail = specialArgs.gitUseremail;
+  hostname = specialArgs.hostname; # This was line 14, where the error occurred
 in
 {
-  # Set the state version for Home Manager.
-  # This should generally match your NixOS system's stateVersion.
-  home.stateVersion = "25.05"; # Adjust to your target NixOS version
+  # MODIFIED: Use the system's stateVersion for Home Manager's stateVersion
+  home.stateVersion = config.system.stateVersion;
 
   # Define packages to be installed specifically for this user via Home Manager.
   home.packages = with pkgs; [
@@ -41,8 +38,8 @@ in
   # Configure Git for the user.
   programs.git = {
     enable = true;
-    userName = gitUsername;  # Use the specific Git username provided during setup.
-    userEmail = gitUseremail; # Use the specific Git email provided during setup.
+    userName = gitUsername;  # Uses gitUsername from the let block
+    userEmail = gitUseremail; # Uses gitUseremail from the let block
     extraConfig = {
       init.defaultBranch = "main"; # Set default branch to 'main' for new repositories.
     };
@@ -68,9 +65,11 @@ in
 
     shellAliases = {
       ll = "ls -l";
+      # Uses 'hostname' from the let block
       update-system = "sudo nixos-rebuild switch --flake /etc/nixos#${hostname}";
     };
-    initExtra = ''
+    # MODIFIED: initExtra changed to initContent to address deprecation warning.
+    initContent = ''
       # Custom Zsh settings
       export EDITOR=nano
 
