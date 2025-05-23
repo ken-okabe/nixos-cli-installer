@@ -314,57 +314,65 @@ generate_from_template() {
     fi
 
     echo "LOG: Generating $output_file_basename from $template_file_basename..."
-    # For debugging specific sed issues, you can print the variables here,
-    # but be careful with PASSWORD_HASH.
-    # echo "LOG:   NIXOS_USERNAME='${NIXOS_USERNAME}'"
-    # echo "LOG:   GIT_USERNAME='${GIT_USERNAME}'"
-    # echo "LOG:   GIT_USEREMAIL='${GIT_USEREMAIL}'"
-    # echo "LOG:   HOSTNAME='${HOSTNAME}'"
-    # echo "LOG:   TARGET_DISK='${TARGET_DISK}'"
-    # echo "LOG:   PASSWORD_HASH='${PASSWORD_HASH}' (DO NOT USE IN PRODUCTION LOGS)"
+
+    # Helper function to escape strings for use in sed's replacement part (RHS of s///)
+    # This specifically escapes:
+    #   \ (backslash) -> \\
+    #   & (ampersand) -> \& (to be treated as a literal ampersand)
+    #   | (pipe symbol, our chosen delimiter) -> \|
+    _escape_sed_replacement_string() {
+        # The order of substitutions is important, especially for backslash.
+        printf '%s\n' "$1" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/|/\\|/g'
+    }
+
+    # Escape all variables that will be used in sed replacement strings
+    local escaped_nixos_username=$(_escape_sed_replacement_string "$NIXOS_USERNAME")
+    # PASSWORD_HASH can contain various special characters, including '$'.
+    # The $ symbol in replacement strings is usually fine unless followed by a number (for backreferences).
+    # Escaping it as well for maximum safety, though our current _escape_sed_replacement_string doesn't target '$'.
+    # The most critical are '&', '\', and our delimiter '|'.
+    local escaped_password_hash=$(_escape_sed_replacement_string "$PASSWORD_HASH")
+    local escaped_git_username=$(_escape_sed_replacement_string "$GIT_USERNAME")
+    local escaped_git_useremail=$(_escape_sed_replacement_string "$GIT_USEREMAIL")
+    local escaped_hostname=$(_escape_sed_replacement_string "$HOSTNAME")
+    # TARGET_DISK usually contains '/' (e.g., /dev/sda). Since '|' is our delimiter, '/' is not special.
+    # However, if TARGET_DISK could exceptionally contain '\', '&', or '|', it should be escaped.
+    local escaped_target_disk=$(_escape_sed_replacement_string "$TARGET_DISK")
 
 
-    # Escaping for sed: Escape characters that are special in sed replacement string or delimiter
-    # Using @ as sed delimiter. Escape @, \, and & (for replacement string). Newline also.
-    local escaped_password_hash # For sed
-    escaped_password_hash=$(printf '%s\n' "$PASSWORD_HASH" | sed -e 's/[\&@\\ учителя]/\\&/g' -e 's/\n/\\n/g')
-    local escaped_target_disk
-    escaped_target_disk=$(printf '%s\n' "$TARGET_DISK" | sed -e 's/[\&@\\ учителя]/\\&/g' -e 's/\n/\\n/g')
-    # Other variables are less likely to contain problematic characters for sed replacement,
-    # but robust escaping would be ideal for all.
-
-    local sed_script_parts=()
-    sed_script_parts+=("-e s@__NIXOS_USERNAME__@${NIXOS_USERNAME}@g")
-    sed_script_parts+=("-e s@__PASSWORD_HASH__@${escaped_password_hash}@g")
-    sed_script_parts+=("-e s@__GIT_USERNAME__@${GIT_USERNAME}@g")
-    sed_script_parts+=("-e s@__GIT_USEREMAIL__@${GIT_USEREMAIL}@g")
-    sed_script_parts+=("-e s@__HOSTNAME__@${HOSTNAME}@g")
-    sed_script_parts+=("-e s@__TARGET_DISK_FOR_GRUB__@${escaped_target_disk}@g")
+    # Build an array of sed expressions
+    local sed_script_expressions=()
+    sed_script_expressions+=("-e s|__NIXOS_USERNAME__|${escaped_nixos_username}|g")
+    sed_script_expressions+=("-e s|__PASSWORD_HASH__|${escaped_password_hash}|g")
+    sed_script_expressions+=("-e s|__GIT_USERNAME__|${escaped_git_username}|g")
+    sed_script_expressions+=("-e s|__GIT_USEREMAIL__|${escaped_git_useremail}|g")
+    sed_script_expressions+=("-e s|__HOSTNAME__|${escaped_hostname}|g")
+    sed_script_expressions+=("-e s|__TARGET_DISK_FOR_GRUB__|${escaped_target_disk}|g")
 
     local temp_output
     temp_output=$(mktemp)
 
-    # For debugging the exact sed command:
-    # echo "LOG DEBUG: sudo sed ${sed_script_parts[*]} \"${template_path}\" > \"${temp_output}\""
-
-    if sudo sed "${sed_script_parts[@]}" "${template_path}" > "${temp_output}"; then
+    echo "LOG: Applying sed script to ${template_file_basename}..."
+    # Pass each -e expression as a separate argument to sed
+    if command sudo sed "${sed_script_expressions[@]}" "${template_path}" > "${temp_output}"; then
         if sudo mv "$temp_output" "$output_path"; then
             echo "LOG: ${output_file_basename} generated successfully at ${output_path}."
             sudo chmod 644 "$output_path"
         else
             echo "ERROR: Failed to move temporary file to ${output_path} (sudo mv \"$temp_output\" \"$output_path\")."
-            rm -f "$temp_output"
+            rm -f "$temp_output" # Clean up temp file on mv failure
             return 1
         fi
     else
         echo "ERROR: sed command failed for generating ${output_file_basename} from ${template_file_basename}."
-        # echo "DEBUG: Failed command was: sudo sed ${sed_script_parts[*]} \"${template_path}\""
-        rm -f "$temp_output"
+        # For debugging, you might want to print the expressions, but be careful if they contain secrets.
+        # echo "DEBUG: Tried to execute: sudo sed <expressions_here> ${template_path}"
+        # printf "DEBUG: Expressions were:\n%s\n" "${sed_script_expressions[@]}"
+        rm -f "$temp_output" # Clean up temp file on sed failure
         return 1
     fi
     return 0
 }
-
 declare -a module_templates=(
     "flake.nix.template:flake.nix"
     "system-settings.nix.template:system-settings.nix"
