@@ -5,7 +5,7 @@
 
   inputs = {
     # Nixpkgs (Nix Packages collection) pinned to a specific version for reproducibility.
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11"; # Or your preferred stable release or unstable.
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05"; # Or your preferred stable release or unstable.
 
     # Home Manager for managing user-specific dotfiles and services.
     home-manager = {
