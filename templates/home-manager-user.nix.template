@@ -1,4 +1,3 @@
-
 # /templates/home-manager-user.nix.template
 #
 # Home Manager configuration for the primary user.
@@ -16,7 +15,7 @@ in
 {
   # Set the state version for Home Manager.
   # This should generally match your NixOS system's stateVersion.
-  home.stateVersion = "24.11"; # Adjust to your target NixOS version
+  home.stateVersion = "25.05"; # Adjust to your target NixOS version
 
   # Define packages to be installed specifically for this user via Home Manager.
   home.packages = with pkgs; [
@@ -25,13 +24,13 @@ in
     # Can be removed if no themes from this package are used.
     # alacritty-themes
 
-    # Powerlevel10k is pulled in by programs.zsh.powerlevel10k.enable.
+    # Powerlevel10k is pulled in by programs.powerlevel10k.enable.
     # Any other user-specific CLI tools or development utilities can go here.
     # Examples:
     # neovim
-    # fzf       # Command-line fuzzy finder
-    # ripgrep   # Fast grep alternative
-    # fd        # Simple, fast and user-friendly alternative to 'find'
+    # fzf      # Command-line fuzzy finder
+    # ripgrep  # Fast grep alternative
+    # fd       # Simple, fast and user-friendly alternative to 'find'
   ];
 
   # Enable Home Manager itself. This is required.
@@ -61,7 +60,7 @@ in
       gh-markdown-preview # For previewing markdown files.
     ];
     settings = {
-      editor = "nano";       # Default editor for gh commands.
+      editor = "nano";      # Default editor for gh commands.
       git_protocol = "ssh";  # Use SSH for Git operations with GitHub (recommended).
     };
   };
@@ -69,32 +68,32 @@ in
   # Configure Zsh shell.
   programs.zsh = {
     enable = true;
-    enableAutosuggestions = true;   # Enable command suggestions based on history.
+    enableAutosuggestions = true;    # Enable command suggestions based on history.
     enableSyntaxHighlighting = true; # Enable syntax highlighting in the Zsh prompt.
-
-    # Enable Powerlevel10k for a highly customizable and informative prompt.
-    # The user will typically be prompted by `p10k configure` on the first Zsh launch
-    # to set up their prompt style. The resulting ~/.p10k.zsh can later be managed
-    # by Home Manager using `home.file.".p10k.zsh".source = ./p10k.zsh-config;` if desired.
-    powerlevel10k = {
-      enable = true;
-      # theme = "your_p10k_theme"; # Optional: if you have a predefined p10k theme string.
-                                  # Leaving this commented out usually triggers the P10k wizard.
-    };
 
     # If you were using Oh My Zsh, you would configure it here.
     # For this setup, we are using direct plugin management and Powerlevel10k.
     # ohMyZsh.enable = false;
 
     # You can add custom Zsh aliases, functions, or source other files here.
-    # shellAliases = {
-    #   ll = "ls -l";
-    #   update-system = "sudo nixos-rebuild switch --flake /etc/nixos#${config.specialArgs.hostname}";
-    # };
-    # initExtra = ''
-    #   # Custom Zsh settings
-    #   export EDITOR=nano
-    # '';
+    shellAliases = {
+      ll = "ls -l";
+      update-system = "sudo nixos-rebuild switch --flake /etc/nixos#${config.specialArgs.hostname}";
+    };
+    initExtra = ''
+      # Custom Zsh settings
+      export EDITOR=nano
+    '';
+  };
+
+  # Configure Powerlevel10k for a highly customizable and informative prompt.
+  programs.powerlevel10k = {
+    enable = true;
+    # The user will typically be prompted by `p10k configure` on the first Zsh launch
+    # to set up their prompt style. The resulting ~/.p10k.zsh can later be managed
+    # by Home Manager using `home.file.".p10k.zsh".source = ./p10k.zsh-config;` if desired.
+    # theme = "your_p10k_theme"; # Optional: if you have a predefined p10k theme string.
+                                # Leaving this commented out usually triggers the P10k wizard.
   };
 
   # Configure Alacritty terminal emulator.
@@ -160,43 +159,44 @@ in
   # Consult xremap-flake documentation for its Home Manager options.
   # The following is an ILLUSTRATIVE example, actual options may differ.
   # Ensure xremap-flake is an input in your main flake.nix and passed to HM's specialArgs.
-  # services.xremap = { # This is a common top-level option name for HM services.
-  #   enable = true;
-  #   # If the HM module for xremap-flake requires specifying the package:
-  #   # package = inputs.xremap-flake.packages.${pkgs.system}.default;
-  #   # Or, the HM module might provide its own default package.
-  #   config = { # This structure depends entirely on xremap-flake's HM module.
-  #     modmap = [
-  #       {
-  #         name = "User Global Remaps";
-  #         remap = {
-  #           "CapsLock" = "Ctrl_L"; # As per user request.
-  #         };
-  #       }
-  #     ];
-  #     # keymap = [ ... ]; # For more complex key combination remaps.
-  #   };
-  #   # withGnome = true; # Or similar options if provided by xremap-flake's HM module.
-  # };
+
+  services.xremap = { # This is a common top-level option name for HM services.
+    enable = true;
+    # If the HM module for xremap-flake requires specifying the package:
+    # package = inputs.xremap-flake.packages.${pkgs.system}.default;
+    # Or, the HM module might provide its own default package.
+    config = { # This structure depends entirely on xremap-flake's HM module.
+      modmap = [
+        {
+          name = "User Global Remaps";
+          remap = {
+            "CapsLock" = "Ctrl_L"; # As per user request.
+          };
+        }
+      ];
+      # keymap = [ ... ]; # For more complex key combination remaps.
+    };
+    # withGnome = true; # Or similar options if provided by xremap-flake's HM module.
+  };
   # If xremap is configured as a NixOS system service (in xremap.nix),
   # then this section in Home Manager might not be needed, or might configure
   # user-specific aspects if the xremap architecture supports it.
   # For now, assuming xremap is handled by the NixOS module as per previous discussion.
 
-  # Standard XDG user directories.
-  # xdg.userDirs.enable = true;
-  # xdg.userDirs.createDirectories = true; # Creates dirs like ~/Videos, ~/Music etc.
+  Standard XDG user directories.
+  xdg.userDirs.enable = true;
+  xdg.userDirs.createDirectories = true; # Creates dirs like ~/Videos, ~/Music etc.
 
   # Allow Home Manager to manage GSettings / dconf (for GNOME settings).
   # dconf.enable = true; # Usually enabled by default if you use dconf.settings.
   # Example dconf settings (to be explored post-install with `dconf watch /`):
-  # dconf.settings = {
-  #   "org/gnome/desktop/interface" = {
-  #     clock-format = "24h";
-  #     // font-name = "Your Preferred Font 11";
-  #   };
-  #   "org/gnome/shell/extensions/dash-to-dock" = { // Example for an extension
-  #     dock-position = "BOTTOM";
-  #   };
-  # };
+  dconf.settings = {
+    "org/gnome/desktop/interface" = {
+      clock-format = "24h";
+      // font-name = "Your Preferred Font 11";
+    };
+    "org/gnome/shell/extensions/dash-to-dock" = { // Example for an extension
+      dock-position = "BOTTOM";
+    };
+  };
 }

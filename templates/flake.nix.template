@@ -89,7 +89,7 @@
 
         # This should be the last imported module or set directly.
         # It defines the NixOS release from which stateful settings defaults are taken.
-        { system.stateVersion = "24.11"; } # Set to the NixOS version you are installing.
+        { system.stateVersion = "25.05"; } # Set to the NixOS version you are installing.
       ];
     };
   };
