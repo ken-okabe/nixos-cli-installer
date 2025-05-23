@@ -11,9 +11,7 @@ let
   hostname = specialArgs.hostname;
 in
 {
-  # MODIFIED: Reverted to a static string, matching the system's stateVersion.
-  # Ensure this matches system.stateVersion in your flake.nix (e.g., "25.05").
-  home.stateVersion = "25.05";
+  home.stateVersion = "25.05"; # Ensure this matches system.stateVersion in your flake.nix
 
   # Define packages to be installed specifically for this user via Home Manager.
   home.packages = with pkgs; [
@@ -21,7 +19,7 @@ in
 
     # Powerlevel10k and its dependencies
     zsh-powerlevel10k  # Powerlevel10k package itself
-    (nerdfonts.override { fonts = [ "Meslo" ]; }) # Meslo Nerd Font (recommended).
+    # nerd-fonts.meslo has been removed as hackgen-nf-font is installed system-wide.
     git                # Required for Powerlevel10k's Git integration features.
 
     # Any other user-specific CLI tools or development utilities can go here.
@@ -100,7 +98,8 @@ in
       };
       font = {
         size = 13;
-        # normal.family = "MesloLGS NF"; # Example Nerd Font
+        # Ensure this is set to your preferred Nerd Font, e.g., "HackGenNerd Console" or "HackGen Console NF"
+        # normal.family = "HackGenNerd Console";
       };
       keyboard.bindings = [
         { key = "V"; mods = "Control"; action = "Paste"; }
