@@ -193,10 +193,10 @@ in
   dconf.settings = {
     "org/gnome/desktop/interface" = {
       clock-format = "24h";
-      // font-name = "Your Preferred Font 11";
+      # font-name = "Your Preferred Font 11";
     };
-    "org/gnome/shell/extensions/dash-to-dock" = { // Example for an extension
-      dock-position = "BOTTOM";
+    "org/gnome/shell/extensions/dash-to-panel" = { # Example for an extension
+      panel-position = "TOP";
     };
   };
 }
