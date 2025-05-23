@@ -7,17 +7,11 @@ set -e # Exit immediately if a command exits with a non-zero status.
 # Get the directory where the script is located to reference template files.
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 TEMPLATE_DIR="${SCRIPT_DIR}/templates"
-# Updated to reflect the new directory name for Zellij KDL files
 USER_CONFIG_FILES_DIR="${SCRIPT_DIR}/templates/zellij_config"
 TARGET_NIXOS_CONFIG_DIR="/mnt/etc/nixos"                # NixOS config on the target mount
 
 # === Function Definitions ===
-# Usage: confirm "Your question" DEFAULT_RESPONSE_CHAR (Y or N)
-# Prompts the user with "Your question [Y/n]: " or "Your question [y/N]: ".
-# Returns 0 (Bash true) if the user confirms (enters 'y', 'yes', or presses Enter if default is 'Y').
-# If the user declines (enters 'n', 'no', or presses Enter if default is 'N'),
-# it re-prompts indefinitely.
-# The user can abort the script at any time by pressing Ctrl+C.
+# ... (confirm, log_cmd, log_sudo_cmd functions remain the same) ...
 confirm() {
     local question="$1"
     local default_response_char="$2" # Expected to be "Y" or "N"
@@ -73,6 +67,7 @@ log_sudo_cmd() {
 }
 
 # --- 0. Preamble and Critical Warning ---
+# ... (Preamble remains the same) ...
 echo "===================================================================="
 echo "NixOS Flake-based Installation Helper Script (Debug Enhanced)"
 echo "===================================================================="
@@ -93,6 +88,7 @@ confirm "Do you understand these warnings and accept full responsibility for pro
 echo "--------------------------------------------------------------------"
 
 # --- 1. Gather Information Interactively ---
+# ... (Information gathering remains the same) ...
 echo "Step 1: Gathering information..."
 # 1.1. Target Disk
 echo ""
@@ -198,7 +194,8 @@ confirm "Review the summary above. Do you want to proceed with these settings?" 
 # Loops if 'n' is pressed. Proceeds if 'y' or Enter (default Y) is pressed. Ctrl+C to abort.
 echo "--------------------------------------------------------------------"
 
-# --- 2. Disk Partitioning, Formatting, and Mounting (Using parted for layout, sgdisk for typecodes, EFI -> Root -> Swap physical order) ---
+# --- 2. Disk Partitioning, Formatting, and Mounting ---
+# ... (Disk operations remain the same) ...
 echo "Step 2: Starting disk partitioning, formatting, and mounting on $TARGET_DISK..."
 echo "This will ERASE ALL DATA on $TARGET_DISK."
 confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK?" "N"
@@ -316,6 +313,7 @@ echo "Disk operations completed successfully."
 echo "--------------------------------------------------------------------"
 
 # --- 3. Generate hardware-configuration.nix ---
+# ... (hardware-configuration.nix generation remains the same) ...
 echo "Step 3: Generating NixOS hardware configuration (hardware-configuration.nix)..."
 log_sudo_cmd nixos-generate-config --root /mnt
 echo "LOG: hardware-configuration.nix generated at ${TARGET_NIXOS_CONFIG_DIR}/hardware-configuration.nix."
@@ -324,6 +322,7 @@ if [ -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix" ]; then
     echo "      This base configuration.nix will NOT be used by our Flake if not explicitly listed in flake.nix's modules."
 fi
 echo "--------------------------------------------------------------------"
+
 
 # --- 4. Generate Flake and Custom Module Files from Templates ---
 echo "Step 4: Generating Flake and custom NixOS module files..."
@@ -414,30 +413,40 @@ done
 # Copy user-provided Zellij config files (from templates/zellij_config/)
 # to /mnt/etc/nixos/zellij_config/ so home-manager-user.nix can source them with ./zellij_config/
 echo "Copying user-provided configuration files (for Zellij) into zellij_config/ subdirectory..."
-if [[ -d "$USER_CONFIG_FILES_DIR" ]]; then
-    # Ensure the target zellij_config subdirectory exists
-    log_sudo_cmd mkdir -p "${TARGET_NIXOS_CONFIG_DIR}/zellij_config" # MODIFIED: Target subdirectory for KDL files
+echo "DEBUG: SCRIPT_DIR is: '${SCRIPT_DIR}'"
+echo "DEBUG: USER_CONFIG_FILES_DIR (source for KDLs) is: '${USER_CONFIG_FILES_DIR}'"
 
-    for user_cfg_file in key-bindings.kdl layout-file.kdl; do # Add other files to this loop if needed
-        if [[ -f "${USER_CONFIG_FILES_DIR}/${user_cfg_file}" ]]; then
-            # Copy to the 'zellij_config' subdirectory
-            if sudo cp "${USER_CONFIG_FILES_DIR}/${user_cfg_file}" "${TARGET_NIXOS_CONFIG_DIR}/zellij_config/${user_cfg_file}"; then # MODIFIED: Copy destination
-                echo "LOG: ${user_cfg_file} copied successfully to ${TARGET_NIXOS_CONFIG_DIR}/zellij_config/." # MODIFIED: Log message
+if [[ -d "$USER_CONFIG_FILES_DIR" ]]; then
+    echo "DEBUG: Source directory for KDL files '$USER_CONFIG_FILES_DIR' exists."
+    log_sudo_cmd mkdir -p "${TARGET_NIXOS_CONFIG_DIR}/zellij_config"
+
+    # MODIFIED: Iterate over filenames with leading dot
+    for user_cfg_file in .key-bindings.kdl .layout-file.kdl; do
+        SOURCE_FILE_PATH="${USER_CONFIG_FILES_DIR}/${user_cfg_file}"
+        echo "DEBUG: Checking for KDL source file at: '${SOURCE_FILE_PATH}'"
+        if [[ -f "$SOURCE_FILE_PATH" ]]; then
+            echo "DEBUG: KDL Source file '$SOURCE_FILE_PATH' found. Attempting to copy."
+            DESTINATION_FILE_PATH="${TARGET_NIXOS_CONFIG_DIR}/zellij_config/${user_cfg_file}"
+            if sudo cp "$SOURCE_FILE_PATH" "$DESTINATION_FILE_PATH"; then
+                echo "LOG: ${user_cfg_file} copied successfully to ${TARGET_NIXOS_CONFIG_DIR}/zellij_config/."
+                echo "DEBUG: Verifying copied file at '${DESTINATION_FILE_PATH}':"
+                ls -la "$DESTINATION_FILE_PATH" || echo "DEBUG: Verification ls failed for ${DESTINATION_FILE_PATH} (file likely not copied)"
             else
-                echo "WARNING: Failed to copy ${user_cfg_file} to ${TARGET_NIXOS_CONFIG_DIR}/zellij_config/." # MODIFIED: Log message
+                echo "WARNING: Failed to copy '${SOURCE_FILE_PATH}' to '${DESTINATION_FILE_PATH}'."
             fi
         else
-            echo "WARNING: User config file not found: ${USER_CONFIG_FILES_DIR}/${user_cfg_file}"
+            echo "WARNING: Source KDL file NOT FOUND: '${SOURCE_FILE_PATH}'"
         fi
     done
 else
-    echo "WARNING: User config file directory ($USER_CONFIG_FILES_DIR) not found. Zellij KDL configs may be missing."
+    echo "WARNING: Source KDL file directory ('$USER_CONFIG_FILES_DIR') NOT FOUND. Zellij KDL configs may be missing."
 fi
 
 echo "All NixOS configuration files generated and placed in ${TARGET_NIXOS_CONFIG_DIR}/."
 echo "--------------------------------------------------------------------"
 
 # --- 5. Install NixOS ---
+# ... (NixOS installation remains the same) ...
 echo "Step 5: Installing NixOS using the Flake configuration..."
 echo "This process will take a significant amount of time. Please be patient."
 echo "You will see a lot of build output."
@@ -462,6 +471,7 @@ else
     echo "You can investigate files in ${TARGET_NIXOS_CONFIG_DIR} or try installation steps again."
     exit 1
 fi
+
 
 echo "===================================================================="
 echo "Script finished."

@@ -19,7 +19,7 @@ in
 
     # Powerlevel10k and its dependencies
     zsh-powerlevel10k  # Powerlevel10k package itself
-    # nerd-fonts.meslo has been removed as hackgen-nf-font is installed system-wide.
+    # User has hackgen-nf-font system-wide, so Meslo is not needed here.
     git                # Required for Powerlevel10k's Git integration features.
 
     # Any other user-specific CLI tools or development utilities can go here.
@@ -98,8 +98,7 @@ in
       };
       font = {
         size = 13;
-        # Ensure this is set to your preferred Nerd Font, e.g., "HackGenNerd Console" or "HackGen Console NF"
-        # normal.family = "HackGenNerd Console";
+        # normal.family = "HackGenNerd Console"; # Example for system-wide HackGen Nerd Font
       };
       keyboard.bindings = [
         { key = "V"; mods = "Control"; action = "Paste"; }
@@ -115,17 +114,20 @@ in
   };
 
   # Place Zellij configuration files under ~/.config/zellij/ (using xdg.configFile).
-  xdg.configFile."zellij/key-bindings.kdl" = {
-    source = ./zellij_config/key-bindings.kdl;
+  # The install-nixos.sh script copies the KDL files (e.g., .key-bindings.kdl)
+  # into a 'zellij_config/' subdirectory within the NixOS configuration root (e.g., /etc/nixos/zellij_config/).
+  # The 'source' path below must match these actual (dot-prefixed) filenames.
+  xdg.configFile."zellij/key-bindings.kdl" = { # Target in ~/.config/zellij/ (typically no leading dot)
+    source = ./zellij_config/.key-bindings.kdl;  # MODIFIED: Source path now includes leading dot
   };
 
-  xdg.configFile."zellij/layout.kdl" = {
-    source = ./zellij_config/layout-file.kdl;
+  xdg.configFile."zellij/layout.kdl" = { # Target in ~/.config/zellij/ (typically no leading dot)
+    source = ./zellij_config/.layout-file.kdl;   # MODIFIED: Source path now includes leading dot
   };
 
   # If you have a main Zellij configuration file (config.kdl), place it similarly:
   # xdg.configFile."zellij/config.kdl" = {
-  #   source = ./zellij_config/config.kdl;
+  #   source = ./zellij_config/.config.kdl; # Note: if your config.kdl is also dot-prefixed
   # };
 
   # xremap configuration via Home Manager.
