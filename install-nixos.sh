@@ -9,17 +9,34 @@ USER_CONFIG_FILES_DIR="${SCRIPT_DIR}/templates/config" # For user-provided Zelli
 TARGET_NIXOS_CONFIG_DIR="/mnt/etc/nixos"
 
 # --- Function Definitions ---
-confirm() {
-    # Ask a yes/no question.
-    # Returns 0 for yes, 1 for no.
+# Confirm function for sensitive operations (default N)
+confirm_sensitive() {
     while true; do
         read -r -p "$1 [y/N]: " response
         case "$response" in
             [yY][eE][sS]|[yY])
                 return 0 # Yes
                 ;;
-            [nN][oO]|[nN]|"")
-                return 1 # No or Enter (defaults to No)
+            [nN][oO]|[nN]|"") # Default to No if Enter is pressed
+                return 1 # No
+                ;;
+            *)
+                echo "Invalid input. Please enter 'y' or 'n'."
+                ;;
+        esac
+    done
+}
+
+# Confirm function for less sensitive operations (default Y)
+confirm_default_yes() {
+    while true; do
+        read -r -p "$1 [Y/n]: " response
+        case "$response" in
+            [yY][eE][sS]|[yY]|"") # Default to Yes if Enter is pressed
+                return 0 # Yes
+                ;;
+            [nN][oO]|[nN])
+                return 1 # No
                 ;;
             *)
                 echo "Invalid input. Please enter 'y' or 'n'."
@@ -37,7 +54,7 @@ echo "         and will install NixOS."
 echo "         Execute this script entirely at your own risk."
 echo "         It is STRONGLY recommended to detach any unnecessary disks"
 echo "         or media before proceeding."
-if ! confirm "Do you understand the risks and wish to continue?"; then
+if ! confirm_sensitive "Do you understand the risks and wish to continue?"; then # Use sensitive confirm
     echo "Installation aborted by user."
     exit 1
 fi
@@ -53,7 +70,7 @@ echo ""
 while true; do
     read -r -p "Enter the target disk for NixOS installation (e.g., /dev/sda): " TARGET_DISK
     if [[ -b "$TARGET_DISK" ]]; then
-        if confirm "Install NixOS on '$TARGET_DISK'? ALL DATA ON THIS DISK WILL BE ERASED!"; then
+        if confirm_sensitive "Install NixOS on '$TARGET_DISK'? ALL DATA ON THIS DISK WILL BE ERASED!"; then # Use sensitive confirm
             break
         fi
     else
@@ -132,7 +149,7 @@ echo "  Git Username:       $GIT_USERNAME"
 echo "  Git Email:          $GIT_USEREMAIL"
 echo "  Hostname:           $HOSTNAME"
 echo "  Password Hash:      (Generated, not displayed)"
-if ! confirm "Proceed with installation using these settings?"; then
+if ! confirm_default_yes "Proceed with installation using these settings?"; then # Use default_yes confirm
     echo "Installation aborted by user."
     exit 1
 fi
@@ -288,7 +305,7 @@ echo "--------------------------------------------------------------------"
 # --- 5. Install NixOS ---
 echo "Step 5: Installing NixOS using the Flake configuration..."
 echo "This process will take a significant amount of time. Please be patient."
-if confirm "Proceed with NixOS installation?"; then
+if confirm_default_yes "Proceed with NixOS installation?"; then # Use default_yes confirm
     echo "Starting nixos-install. Output will be verbose..."
     # Use --no-root-passwd because rootHashedPassword is set in users.nix
     if sudo nixos-install --no-root-passwd --flake "${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}"; then
