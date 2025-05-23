@@ -183,7 +183,7 @@ in
   # user-specific aspects if the xremap architecture supports it.
   # For now, assuming xremap is handled by the NixOS module as per previous discussion.
 
-  Standard XDG user directories.
+  # Standard XDG user directories.
   xdg.userDirs.enable = true;
   xdg.userDirs.createDirectories = true; # Creates dirs like ~/Videos, ~/Music etc.
 
