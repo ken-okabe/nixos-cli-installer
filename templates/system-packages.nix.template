@@ -14,29 +14,26 @@
     zellij    # Terminal multiplexer
 
     # GNOME specific tools
-    gnomeExtensions.extension-manager # To manage GNOME Shell Extensions
+    gnome-extension-manager           # To manage GNOME Shell Extensions
     gnome-tweaks                      # For advanced GNOME settings customization
     dconf-editor                      # Low-level configuration editor for dconf/GSettings
 
     # Input Method Framework (core) - specific engines in ime-and-fonts.nix
     fcitx5
 
-    # Media and Development
-    mpv          # Versatile media player
+    # Development
     nodejs_20    # Node.js LTS (includes npm) - choose version as needed
-
+    dotnetCorePackages.sdk_9_0-bin
+    
     # Utilities
     webp-pixbuf-loader # For WebP image support in GTK/GNOME applications
     tree               # Displays directory structures as a tree
     bottom             # A graphical process/system monitor
-
-    # Add other essential CLI tools or system-wide utilities here.
-    # Examples:
-    # curl
-    # wget
+    curl
+    wget
     # htop
     # file
-    # which
+    which
     # man-pages # For offline man pages
     # man-db    # For `man` command itself and `mandb`
   ];
