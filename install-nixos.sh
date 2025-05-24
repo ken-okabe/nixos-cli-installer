@@ -102,11 +102,14 @@ echo "LOG: TARGET_DISK set to: $TARGET_DISK"
 SWAP_SIZE_GB="16"
 DEFAULT_EFI_SIZE_MiB="512"
 EFI_PART_NAME="EFI"
-SWAP_PART_NAME="SWAP"
+SWAP_PART_NAME="SWAP" # Used later for swapon/swapoff by label
 ROOT_PART_NAME="ROOT_NIXOS"
 DEFAULT_ROOT_FS_TYPE="ext4"
 echo "LOG: SWAP_SIZE_GB=${SWAP_SIZE_GB}, DEFAULT_EFI_SIZE_MiB=${DEFAULT_EFI_SIZE_MiB}"
 echo "LOG: EFI_PART_NAME=${EFI_PART_NAME}, SWAP_PART_NAME=${SWAP_PART_NAME}, ROOT_PART_NAME=${ROOT_PART_NAME}, DEFAULT_ROOT_FS_TYPE=${DEFAULT_ROOT_FS_TYPE}"
+
+# These will be defined later, but declare them for the initial swapoff attempt
+SWAP_DEVICE_NODE="" 
 
 echo ""
 read -r -p "Enter the desired username for the primary system user (e.g., ken): " NIXOS_USERNAME
@@ -183,6 +186,29 @@ echo "This will ERASE ALL DATA on $TARGET_DISK."
 confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK?" "N"
 
 { 
+    echo "LOG: Attempting to unmount target filesystems and turn off swap if active..."
+    if mountpoint -q /mnt/boot; then
+        echo "LOG: /mnt/boot is mounted. Attempting to unmount..."
+        sudo umount /mnt/boot || echo "WARN: Failed to unmount /mnt/boot. It might be busy."
+    fi
+    if mountpoint -q /mnt; then
+        echo "LOG: /mnt is mounted. Attempting to unmount..."
+        sudo umount /mnt || echo "WARN: Failed to unmount /mnt. It might be busy."
+    fi
+    
+    # Try to turn off swap using the name that *will be* assigned.
+    # This helps if the script is re-run after a partial success where swap was activated.
+    if [[ -n "$SWAP_PART_NAME" ]]; then
+        echo "LOG: Attempting to swapoff by label $SWAP_PART_NAME (if it exists from a previous run)..."
+        sudo swapoff -L "$SWAP_PART_NAME" &>/dev/null || true 
+    fi
+    # Also try to turn off all swap as a general measure, but ignore errors.
+    echo "LOG: Attempting to swapoff all active swap partitions (swapoff -a)..."
+    sudo swapoff -a &>/dev/null || true
+
+    echo "LOG: Finished attempting to unmount and turn off swap."
+    sleep 2 
+
     echo "LOG: Using sgdisk to zap all existing GPT data and partitions on $TARGET_DISK..."
     log_sudo_cmd sgdisk --zap-all "$TARGET_DISK"
     
@@ -233,7 +259,7 @@ confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK?" "N"
     fi
     EFI_DEVICE_NODE="${TARGET_DISK}${PART_SUFFIX_1}"
     ROOT_DEVICE_NODE="${TARGET_DISK}${PART_SUFFIX_2}"
-    SWAP_DEVICE_NODE="${TARGET_DISK}${PART_SUFFIX_3}"
+    SWAP_DEVICE_NODE="${TARGET_DISK}${PART_SUFFIX_3}" # Now defined before potential use in initial swapoff
 
     echo "LOG: Defining partition structure (EFI, Root, Swap)..."
     EFI_START_OFFSET_MiB="1"
@@ -317,12 +343,18 @@ confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK?" "N"
 } || {
     echo "ERROR: A critical error occurred during disk operations."
     echo "Attempting to clean up mounts..."
-    sudo umount -l /mnt/boot &>/dev/null || true
-    sudo umount -l /mnt &>/dev/null || true
+    # Try to unmount target mount points specifically
+    if mountpoint -q /mnt/boot; then sudo umount -l /mnt/boot &>/dev/null || true; fi
+    if mountpoint -q /mnt; then sudo umount -l /mnt &>/dev/null || true; fi
+    
+    # Try to swapoff specific device/label if variables were set
     if [[ -n "$SWAP_DEVICE_NODE" && -e "$SWAP_DEVICE_NODE" ]]; then
         sudo swapoff "$SWAP_DEVICE_NODE" &>/dev/null || true
-    elif [[ -n "$SWAP_PART_NAME" ]]; then
+    elif [[ -n "$SWAP_PART_NAME" ]]; then # SWAP_PART_NAME should be defined by now
         sudo swapoff -L "$SWAP_PART_NAME" &>/dev/null || true
+    else
+        # Fallback if specific identifiers are not available (less targeted)
+        sudo swapoff -a &>/dev/null || true
     fi
     echo "Examine logs above for details. You may need to manually clean up ${TARGET_DISK}."
     exit 1
@@ -342,8 +374,6 @@ echo "--------------------------------------------------------------------"
 
 # --- 4. Generate Flake and Custom Module Files from Templates ---
 echo "Step 4: Generating Flake and custom NixOS module files..."
-# The pre-cleanup of TARGET_NIXOS_CONFIG_DIR was removed as per discussion,
-# relying on Step 2 to provide a clean filesystem.
 log_sudo_cmd mkdir -p "${TARGET_NIXOS_CONFIG_DIR}"
 echo "LOG: Ensured ${TARGET_NIXOS_CONFIG_DIR} exists."
 
