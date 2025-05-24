@@ -15,7 +15,8 @@ in
 
   # Define packages to be installed specifically for this user via Home Manager.
   home.packages = with pkgs; [
-    zellij # Install Zellij
+
+    zsh-history-substring-search # For prefix-based history search
 
     # Powerlevel10k and its dependencies
     zsh-powerlevel10k  # Powerlevel10k package itself
@@ -50,7 +51,7 @@ in
       gh-markdown-preview
     ];
     settings = {
-      editor = "nano";
+      editor = "nano"; # Or your preferred editor
       git_protocol = "ssh";
     };
   };
@@ -58,16 +59,16 @@ in
   # Configure Zsh shell.
   programs.zsh = {
     enable = true;
-    enableAutosuggestions = true;
-    enableSyntaxHighlighting = true;
-
+    autosuggestion.enable = true;    # Provided by zsh-autosuggestions plugin
+    syntaxHighlighting.enable = true; # Provided by zsh-syntax-highlighting plugin
+    autocd = true;
     shellAliases = {
       ll = "ls -l";
       update-system = "sudo nixos-rebuild switch --flake /etc/nixos#${hostname}";
     };
     initContent = ''
       # Custom Zsh settings
-      export EDITOR=nano
+      export EDITOR=nano # Or your preferred editor
 
       # Powerlevel10k initialization
       if [ -f "${pkgs.zsh-powerlevel10k}/share/zsh-powerlevel10k/powerlevel10k.zsh-theme" ]; then
@@ -76,59 +77,78 @@ in
       if [[ -r "${config.home.homeDirectory}/.p10k.zsh" ]]; then
         source "${config.home.homeDirectory}/.p10k.zsh"
       fi
-    '';
+
+      # Load zsh-history-substring-search plugin and bind keys
+      # This plugin allows you to search history based on the current command line prefix.
+      local history_substring_search_path="${pkgs.zsh-history-substring-search}/share/zsh-history-substring-search/zsh-history-substring-search.zsh"
+      if [ -f "$history_substring_search_path" ]; then
+        source "$history_substring_search_path"
+
+        # Bind Up and Down arrow keys to history-substring-search widgets
+        # "$terminfo[kcuu1]" is the Up arrow key
+        # "$terminfo[kcud1]" is the Down arrow key
+        bindkey "$terminfo[kcuu1]" history-substring-search-up
+        bindkey "$terminfo[kcud1]" history-substring-search-down
+      else
+        echo "Warning: zsh-history-substring-search plugin not found at $history_substring_search_path" >&2
+      fi
+    ''; # End of initContent
   };
 
-  # Configure Alacritty terminal emulator.
-  programs.alacritty = {
+  # Configure Ghostty terminal emulator
+  programs.ghostty = {
     enable = true;
+    package = pkgs.ghostty; # Explicitly specify the package
+
     settings = {
-      cursor = {
-        style = { shape = "Beam"; blinking = "Always"; };
-        blink_interval = 500;
-        blink_timeout = 0;
-        unfocused_hollow = false;
-        thickness = 0.2;
-      };
-      window = {
-        decorations = "None";
-        opacity = 0.9;
-        blur = true;
-        startup_mode = "Maximized";
-      };
-      font = {
-        size = 13;
-        # normal.family = "HackGenNerd Console"; # Example for system-wide HackGen Nerd Font
-      };
-      keyboard.bindings = [
-        { key = "V"; mods = "Control"; action = "Paste"; }
+      # Font settings (font-family is not set, Ghostty will use its default)
+      font-size = 12;       # Example font size, adjust as needed
+      # You can set font-family here if you choose one, e.g.:
+      # font-family = "JetBrainsMono Nerd Font";
+
+      # Background opacity (0.0 = fully transparent, 1.0 = fully opaque)
+      background-opacity = 0.8;
+
+      # Enable automatic copy when text is selected
+      copy-on-select = true;
+
+      # Keybindings
+      keybind = [
+        # Copy/Paste
+        "ctrl+shift+c=copy_to_clipboard"
+        "ctrl+v=paste_from_clipboard"
+        "ctrl+shift+v=paste_from_clipboard"
+
+        # Pane/Split navigation and manipulation
+        "ctrl+left=goto_split:left"
+        "ctrl+down=goto_split:down"
+        "ctrl+up=goto_split:up"
+        "ctrl+right=goto_split:right"
+
+        "ctrl+enter=new_split:down"            # Create a new split below the current one
       ];
-      terminal.shell = {
-        program = "${lib.getExe pkgs.zsh}";
-        args = [
-          "-c"
-          "${lib.getExe pkgs.zellij}"
-        ];
-      };
+
+      # Other Ghostty settings can be added here.
+      # Refer to Ghostty's documentation for all available options:
+      # https://ghostty.org/docs/config/reference
+      # Example:
+      # window-decoration = "none";
+      # scrollback-lines = 10000;
     };
-  };
 
-  # Place Zellij configuration files under ~/.config/zellij/ (using xdg.configFile).
-  # The install-nixos.sh script copies the KDL files (e.g., .key-bindings.kdl)
-  # into a 'zellij_config/' subdirectory within the NixOS configuration root (e.g., /etc/nixos/zellij_config/).
-  # The 'source' path below must match these actual (dot-prefixed) filenames.
-  xdg.configFile."zellij/key-bindings.kdl" = { # Target in ~/.config/zellij/ (typically no leading dot)
-    source = ./zellij_config/.key-bindings.kdl;  # MODIFIED: Source path now includes leading dot
-  };
+    # By default, Ghostty's default keybinds are used.
+    # Set to true if you want to clear them before applying the keybinds above.
+    clearDefaultKeybinds = false;
 
-  xdg.configFile."zellij/layout.kdl" = { # Target in ~/.config/zellij/ (typically no leading dot)
-    source = ./zellij_config/.layout-file.kdl;   # MODIFIED: Source path now includes leading dot
-  };
+    # Enable Zsh shell integration
+    enableZshIntegration = true;
 
-  # If you have a main Zellij configuration file (config.kdl), place it similarly:
-  # xdg.configFile."zellij/config.kdl" = {
-  #   source = ./zellij_config/.config.kdl; # Note: if your config.kdl is also dot-prefixed
-  # };
+    # Vim syntax installation is not enabled.
+    # installVimSyntax = false;
+
+    # Bat syntax installation will use its default (true if package is available).
+    # installBatSyntax = true;
+  };
 
   # xremap configuration via Home Manager.
   services.xremap = {
