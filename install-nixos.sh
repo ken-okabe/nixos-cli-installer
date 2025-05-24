@@ -11,7 +11,6 @@ USER_CONFIG_FILES_DIR="${SCRIPT_DIR}/templates/zellij_config"
 TARGET_NIXOS_CONFIG_DIR="/mnt/etc/nixos"                # NixOS config on the target mount
 
 # === Function Definitions ===
-# ... (confirm, log_cmd, log_sudo_cmd functions remain the same) ...
 confirm() {
     local question="$1"
     local default_response_char="$2" # Expected to be "Y" or "N"
@@ -22,31 +21,28 @@ confirm() {
     elif [[ "$default_response_char" == "N" ]]; then
         prompt_display="[y/N]"
     else
-        # This indicates a script developer error in calling this function.
         echo "DEVELOPER ERROR: confirm function called with invalid default_response_char: '$default_response_char'. Assuming 'N' as a safe default." >&2
         prompt_display="[y/N]"
-        default_response_char="N" # Fallback to the safer 'N' default.
+        default_response_char="N" 
     fi
 
     while true; do
         read -r -p "${question} ${prompt_display}: " response
         local response_lower
-        response_lower=$(echo "$response" | tr '[:upper:]' '[:lower:]') # Case-insensitive comparison
+        response_lower=$(echo "$response" | tr '[:upper:]' '[:lower:]') 
 
         case "$response_lower" in
             y|yes)
-                return 0 # User explicitly confirmed with 'y' or 'yes'.
+                return 0 
                 ;;
             n|no)
                 echo "You selected 'No'. The question will be asked again. Press Ctrl+C to abort the script if you do not wish to proceed."
-                # Loop continues, re-prompting the same question.
                 ;;
-            "") # Enter key was pressed.
+            "") 
                 if [[ "$default_response_char" == "Y" ]]; then
-                    return 0 # Default action is 'Yes'.
-                else # Default action is 'No' (or an invalid default_response_char was given).
+                    return 0 
+                else 
                     echo "Default is 'No' (Enter pressed). The question will be asked again. Press Ctrl+C to abort."
-                    # Loop continues, re-prompting the same question.
                 fi
                 ;;
             *)
@@ -58,16 +54,15 @@ confirm() {
 
 log_cmd() {
     echo "LOG: CMD: $*"
-    "$@" # Execute the command
+    "$@" 
 }
 
 log_sudo_cmd() {
     echo "LOG: SUDO CMD: $*"
-    sudo "$@" # Execute the command with sudo
+    sudo "$@" 
 }
 
 # --- 0. Preamble and Critical Warning ---
-# ... (Preamble remains the same) ...
 echo "===================================================================="
 echo "NixOS Flake-based Installation Helper Script (Debug Enhanced)"
 echo "===================================================================="
@@ -84,34 +79,28 @@ echo "           2. Detach any unnecessary disks or media before proceeding."
 echo "           3. Carefully verify the target disk when prompted."
 echo "--------------------------------------------------------------------"
 confirm "Do you understand these warnings and accept full responsibility for proceeding?" "N"
-# Script proceeds only if user types 'y'. Otherwise, loops here until Ctrl+C.
 echo "--------------------------------------------------------------------"
 
 # --- 1. Gather Information Interactively ---
-# ... (Information gathering remains the same) ...
 echo "Step 1: Gathering information..."
-# 1.1. Target Disk
 echo ""
 echo "Available block devices (physical disks, not partitions):"
-lsblk -pno NAME,SIZE,MODEL # List block devices to help user identify the target.
+lsblk -pno NAME,SIZE,MODEL 
 echo ""
 while true; do
     read -r -p "Enter the target disk for NixOS installation (e.g., /dev/sda, /dev/nvme0n1): " TARGET_DISK
-    if [[ -b "$TARGET_DISK" ]]; then # Check if it's a block device.
+    if [[ -b "$TARGET_DISK" ]]; then 
         TARGET_DISK_PROMPT="You have selected '$TARGET_DISK'. ALL DATA ON THIS DISK WILL BE ERASED! Are you absolutely sure?"
-        confirm "$TARGET_DISK_PROMPT" "N" # Loops until 'y' is pressed. Ctrl+C to abort.
-        break # Exit while loop once user explicitly confirms with 'y'.
+        confirm "$TARGET_DISK_PROMPT" "N" 
+        break 
     else
         echo "Error: '$TARGET_DISK' is not a valid block device. Please try again."
     fi
 done
 echo "LOG: TARGET_DISK set to: $TARGET_DISK"
 
-
-# 1.2. Partitioning Constants
 SWAP_SIZE_GB="16"
 DEFAULT_EFI_SIZE_MiB="512"
-
 EFI_PART_NAME="EFI"
 SWAP_PART_NAME="SWAP"
 ROOT_PART_NAME="ROOT_NIXOS"
@@ -119,8 +108,6 @@ DEFAULT_ROOT_FS_TYPE="ext4"
 echo "LOG: SWAP_SIZE_GB=${SWAP_SIZE_GB}, DEFAULT_EFI_SIZE_MiB=${DEFAULT_EFI_SIZE_MiB}"
 echo "LOG: EFI_PART_NAME=${EFI_PART_NAME}, SWAP_PART_NAME=${SWAP_PART_NAME}, ROOT_PART_NAME=${ROOT_PART_NAME}, DEFAULT_ROOT_FS_TYPE=${DEFAULT_ROOT_FS_TYPE}"
 
-
-# 1.3. System Username
 echo ""
 read -r -p "Enter the desired username for the primary system user (e.g., ken): " NIXOS_USERNAME
 while [[ -z "$NIXOS_USERNAME" ]]; do
@@ -128,7 +115,6 @@ while [[ -z "$NIXOS_USERNAME" ]]; do
 done
 echo "LOG: NIXOS_USERNAME set to: $NIXOS_USERNAME"
 
-# 1.4. Password Setup (using mkpasswd)
 echo ""
 echo "Next, set the password for the system user ('${NIXOS_USERNAME}') and the root account."
 echo "You will be prompted to enter the password twice (input will not be displayed)."
@@ -158,7 +144,6 @@ unset pass1
 unset pass2
 echo "LOG: Password hash generated."
 
-# 1.5. Git User Information (distinct from system user)
 echo ""
 read -r -p "Enter your Git username (for commits, can be different from system user): " GIT_USERNAME
 while [[ -z "$GIT_USERNAME" ]]; do
@@ -171,7 +156,6 @@ while [[ -z "$GIT_USEREMAIL" ]]; do
 done
 echo "LOG: GIT_USEREMAIL set to: $GIT_USEREMAIL"
 
-# 1.6. Hostname
 echo ""
 DEFAULT_HOSTNAME="nixos"
 read -r -p "Enter the system hostname (default: ${DEFAULT_HOSTNAME}): " HOSTNAME
@@ -191,21 +175,39 @@ echo "  Hostname:           $HOSTNAME"
 echo "  Password Hash:      (Generated, not displayed for security)"
 echo ""
 confirm "Review the summary above. Do you want to proceed with these settings?" "Y"
-# Loops if 'n' is pressed. Proceeds if 'y' or Enter (default Y) is pressed. Ctrl+C to abort.
 echo "--------------------------------------------------------------------"
 
 # --- 2. Disk Partitioning, Formatting, and Mounting ---
-# ... (Disk operations remain the same) ...
 echo "Step 2: Starting disk partitioning, formatting, and mounting on $TARGET_DISK..."
 echo "This will ERASE ALL DATA on $TARGET_DISK."
 confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK?" "N"
-# Loops if 'n' or Enter (default N) is pressed. Proceeds if 'y' is pressed. Ctrl+C to abort.
 
-{ # Start of disk operations block
+{ 
+    echo "LOG: Using sgdisk to zap all existing GPT data and partitions on $TARGET_DISK..."
+    log_sudo_cmd sgdisk --zap-all "$TARGET_DISK"
+    
+    echo "LOG: Informing kernel of partition table changes after zapping..."
+    sync
+    log_sudo_cmd partprobe "$TARGET_DISK" || echo "WARN: partprobe after sgdisk --zap-all failed, proceeding with caution."
+    sleep 3
+    log_sudo_cmd blockdev --rereadpt "$TARGET_DISK" || echo "WARN: blockdev --rereadpt after sgdisk --zap-all failed."
+    sleep 3
+    echo "LOG: Disk $TARGET_DISK should now be logically empty of partitions."
+    echo "LOG: Current disk state after zapping (should show no partitions or an empty table):"
+    sudo parted --script "$TARGET_DISK" print
+    echo "-------------------------------------"
+
     echo "LOG: Creating new GPT partition table on $TARGET_DISK..."
-    log_sudo_cmd parted --script "$TARGET_DISK" mklabel gpt
-    echo "LOG: New GPT partition table created. Disk is now logically empty of partitions."
-    echo "LOG: Current disk state (should show an empty GPT table or no partitions):"
+    log_sudo_cmd parted --script "$TARGET_DISK" mklabel gpt 
+    echo "LOG: New GPT partition table created."
+    
+    echo "LOG: Informing kernel of new GPT label..."
+    sync
+    log_sudo_cmd partprobe "$TARGET_DISK" || echo "WARN: partprobe after mklabel gpt failed."
+    sleep 3
+    log_sudo_cmd blockdev --rereadpt "$TARGET_DISK" || echo "WARN: blockdev --rereadpt after mklabel gpt failed."
+    sleep 3
+    echo "LOG: Current disk state after mklabel gpt (should show an empty GPT table):"
     sudo parted --script "$TARGET_DISK" print
     echo "-------------------------------------"
 
@@ -254,22 +256,38 @@ confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK?" "N"
     log_sudo_cmd sgdisk --typecode=3:8200 "$TARGET_DISK"
 
     echo "LOG: All partition definitions and type codes have been set."
+    echo "LOG: Informing kernel of partition table changes (attempting multiple methods)..."
+    sync
+    echo "LOG: Attempt 1: partprobe ${TARGET_DISK}"
+    if sudo partprobe "$TARGET_DISK"; then
+        echo "LOG: partprobe successful."
+    else
+        echo "WARN: partprobe failed on attempt 1. Continuing..."
+    fi
+    sleep 3
+
+    echo "LOG: Attempt 2: blockdev --rereadpt ${TARGET_DISK}"
+    if sudo blockdev --rereadpt "$TARGET_DISK"; then
+        echo "LOG: blockdev --rereadpt successful."
+    else
+        echo "WARN: blockdev --rereadpt failed. Kernel might still use old partition table."
+    fi
+    sleep 3
+
+    echo "LOG: Attempt 3: partprobe ${TARGET_DISK} (again)"
+    if sudo partprobe "$TARGET_DISK"; then
+        echo "LOG: partprobe (2nd attempt) successful."
+    else
+        echo "WARN: partprobe (2nd attempt) also failed. There might be issues with partition recognition."
+    fi
+    sleep 2
+    echo "LOG: Finished attempting to inform kernel of partition changes."
+
     echo "LOG: Displaying partition layout BEFORE formatting."
-    echo "LOG: IMPORTANT: The 'File system' column shown by 'parted' below is based on the PARTITION TYPE CODES set."
-    echo "LOG:            It does NOT yet reflect actual formatted filesystems. Any pre-existing data or filesystem SIGNATURES"
-    echo "LOG:            on the disk WILL BE OVERWRITTEN in the next steps."
     sudo parted --script "$TARGET_DISK" print
     echo "-------------------------------------"
 
-    echo "LOG: Informing kernel of partition table changes..."
-    log_sudo_cmd partprobe "$TARGET_DISK" && sleep 3
-
     echo "LOG: Proceeding to format partitions. This will ERASE any data/signatures within these defined partitions."
-    echo "LOG:   - EFI Partition ($EFI_DEVICE_NODE, Name: $EFI_PART_NAME) will be formatted as FAT32."
-    echo "LOG:   - Root Partition ($ROOT_DEVICE_NODE, Name: $ROOT_PART_NAME) will be formatted as $DEFAULT_ROOT_FS_TYPE."
-    echo "LOG:   - Swap Partition ($SWAP_DEVICE_NODE, Name: $SWAP_PART_NAME) will be formatted as Linux Swap."
-    echo "LOG: Formatting commands will use force options to overwrite any existing filesystem signatures automatically."
-
     echo "LOG: Formatting $EFI_DEVICE_NODE (EFI) as fat32, label: $EFI_PART_NAME..."
     log_sudo_cmd mkfs.vfat -F 32 -n "$EFI_PART_NAME" "$EFI_DEVICE_NODE"
 
@@ -313,7 +331,6 @@ echo "Disk operations completed successfully."
 echo "--------------------------------------------------------------------"
 
 # --- 3. Generate hardware-configuration.nix ---
-# ... (hardware-configuration.nix generation remains the same) ...
 echo "Step 3: Generating NixOS hardware configuration (hardware-configuration.nix)..."
 log_sudo_cmd nixos-generate-config --root /mnt
 echo "LOG: hardware-configuration.nix generated at ${TARGET_NIXOS_CONFIG_DIR}/hardware-configuration.nix."
@@ -323,40 +340,12 @@ if [ -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix" ]; then
 fi
 echo "--------------------------------------------------------------------"
 
-
 # --- 4. Generate Flake and Custom Module Files from Templates ---
 echo "Step 4: Generating Flake and custom NixOS module files..."
-
-# === MODIFIED PART: Cleanup TARGET_NIXOS_CONFIG_DIR ===
-echo "LOG: Ensuring ${TARGET_NIXOS_CONFIG_DIR} is clean before generating new configuration files."
-# This assumes /mnt is already mounted from Step 2.
-# We are cleaning the *contents* of /mnt/etc/nixos, not unmounting /mnt itself.
-if [ -d "${TARGET_NIXOS_CONFIG_DIR}" ]; then
-    echo "LOG: Directory ${TARGET_NIXOS_CONFIG_DIR} exists. Clearing its contents..."
-    # Using find to delete contents. This is safer than rm -rf *
-    # It deletes all files and directories directly under TARGET_NIXOS_CONFIG_DIR
-    # but not TARGET_NIXOS_CONFIG_DIR itself.
-    # The path is quoted and uses :? to prevent accidental deletion if variable is unset.
-    if sudo find "${TARGET_NIXOS_CONFIG_DIR:?}" -mindepth 1 -delete; then
-        echo "LOG: Contents of ${TARGET_NIXOS_CONFIG_DIR} cleared successfully."
-    else
-        # find might return non-zero if directory was already empty or for other reasons
-        # but we still want to proceed with mkdir -p.
-        # Check if it's empty now.
-        if [ -z "$(sudo ls -A "${TARGET_NIXOS_CONFIG_DIR}")" ]; then
-            echo "LOG: ${TARGET_NIXOS_CONFIG_DIR} is now empty."
-        else
-            echo "WARN: Failed to clear all contents of ${TARGET_NIXOS_CONFIG_DIR}, or it was not empty after find. Manual check might be needed."
-        fi
-    fi
-else
-    echo "LOG: Directory ${TARGET_NIXOS_CONFIG_DIR} does not exist yet, no need to clear."
-fi
-# Ensure the directory exists (original command from script)
+# The pre-cleanup of TARGET_NIXOS_CONFIG_DIR was removed as per discussion,
+# relying on Step 2 to provide a clean filesystem.
 log_sudo_cmd mkdir -p "${TARGET_NIXOS_CONFIG_DIR}"
 echo "LOG: Ensured ${TARGET_NIXOS_CONFIG_DIR} exists."
-# === END OF MODIFIED PART ===
-
 
 generate_from_template() {
     local template_file_basename="$1"
@@ -401,18 +390,16 @@ generate_from_template() {
             sudo chmod 644 "$output_path"
         else
             echo "ERROR: Failed to move temporary file to ${output_path} (sudo mv \"$temp_output\" \"$output_path\")."
-            rm -f "$temp_output" # Ensure temp file is cleaned up on error
+            rm -f "$temp_output" 
             return 1
         fi
     else
         echo "ERROR: sed command failed for generating ${output_file_basename} from ${template_file_basename}."
-        rm -f "$temp_output" # Ensure temp file is cleaned up on error
+        rm -f "$temp_output" 
         return 1
     fi
-    # No explicit return 0 needed due to set -e; successful completion implies 0.
 }
 
-# List of templates and their corresponding output file names.
 declare -a module_templates=(
     "flake.nix.template:flake.nix"
     "system-settings.nix.template:system-settings.nix"
@@ -431,27 +418,22 @@ declare -a module_templates=(
     "home-manager-user.nix.template:home-manager-user.nix"
 )
 
-# Generate each module file from its template.
 for item in "${module_templates[@]}"; do
-    IFS=":" read -r template_name output_name <<< "$item" # Split "template:output"
+    IFS=":" read -r template_name output_name <<< "$item" 
     if ! generate_from_template "$template_name" "$output_name"; then
         echo "ERROR: Failed to generate ${output_name}. Aborting installation."
-        exit 1 # Exit immediately if template generation fails
+        exit 1 
     fi
 done
 
-# Copy user-provided Zellij config files (from templates/zellij_config/)
-# to /mnt/etc/nixos/zellij_config/ so home-manager-user.nix can source them with ./zellij_config/
 echo "Copying user-provided configuration files (for Zellij) into zellij_config/ subdirectory..."
 echo "DEBUG: SCRIPT_DIR is: '${SCRIPT_DIR}'"
 echo "DEBUG: USER_CONFIG_FILES_DIR (source for KDLs) is: '${USER_CONFIG_FILES_DIR}'"
 
 if [[ -d "$USER_CONFIG_FILES_DIR" ]]; then
     echo "DEBUG: Source directory for KDL files '$USER_CONFIG_FILES_DIR' exists."
-    # Ensure zellij_config subdir is created (it should be under TARGET_NIXOS_CONFIG_DIR which was just ensured)
     log_sudo_cmd mkdir -p "${TARGET_NIXOS_CONFIG_DIR}/zellij_config"
 
-    # MODIFIED: Iterate over filenames with leading dot
     for user_cfg_file in .key-bindings.kdl .layout-file.kdl; do
         SOURCE_FILE_PATH="${USER_CONFIG_FILES_DIR}/${user_cfg_file}"
         echo "DEBUG: Checking for KDL source file at: '${SOURCE_FILE_PATH}'"
@@ -477,18 +459,13 @@ echo "All NixOS configuration files generated and placed in ${TARGET_NIXOS_CONFI
 echo "--------------------------------------------------------------------"
 
 # --- 5. Install NixOS ---
-# ... (NixOS installation remains the same) ...
 echo "Step 5: Installing NixOS using the Flake configuration..."
 echo "This process will take a significant amount of time. Please be patient."
 echo "You will see a lot of build output."
 echo ""
 confirm "Proceed with NixOS installation?" "Y"
-# Loops if 'n' is pressed. Proceeds if 'y' or Enter (default Y) is pressed. Ctrl+C to abort.
-
-# The debug block that was previously here has been removed as per your request.
 
 echo "LOG: Starting nixos-install --no-root-passwd --flake ${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}"
-# The actual installation command.
 if sudo nixos-install --no-root-passwd --flake "${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}"; then
     echo ""
     echo "--------------------------------------------------------------------"
@@ -502,7 +479,6 @@ else
     echo "You can investigate files in ${TARGET_NIXOS_CONFIG_DIR} or try installation steps again."
     exit 1
 fi
-
 
 echo "===================================================================="
 echo "Script finished."
