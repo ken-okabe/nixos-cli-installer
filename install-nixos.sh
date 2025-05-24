@@ -7,7 +7,7 @@ set -e # Exit immediately if a command exits with a non-zero status.
 # Get the directory where the script is located to reference template files.
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 TEMPLATE_DIR="${SCRIPT_DIR}/templates"
-USER_CONFIG_FILES_DIR="${SCRIPT_DIR}/templates/zellij_config"
+# USER_CONFIG_FILES_DIR variable removed as it was Zellij specific
 TARGET_NIXOS_CONFIG_DIR="/mnt/etc/nixos"                # NixOS config on the target mount
 
 # === Function Definitions ===
@@ -458,34 +458,7 @@ for item in "${module_templates[@]}"; do
     fi
 done
 
-echo "Copying user-provided configuration files (for Zellij) into zellij_config/ subdirectory..."
-echo "DEBUG: SCRIPT_DIR is: '${SCRIPT_DIR}'"
-echo "DEBUG: USER_CONFIG_FILES_DIR (source for KDLs) is: '${USER_CONFIG_FILES_DIR}'"
-
-if [[ -d "$USER_CONFIG_FILES_DIR" ]]; then
-    echo "DEBUG: Source directory for KDL files '$USER_CONFIG_FILES_DIR' exists."
-    log_sudo_cmd mkdir -p "${TARGET_NIXOS_CONFIG_DIR}/zellij_config"
-
-    for user_cfg_file in .key-bindings.kdl .layout-file.kdl; do
-        SOURCE_FILE_PATH="${USER_CONFIG_FILES_DIR}/${user_cfg_file}"
-        echo "DEBUG: Checking for KDL source file at: '${SOURCE_FILE_PATH}'"
-        if [[ -f "$SOURCE_FILE_PATH" ]]; then
-            echo "DEBUG: KDL Source file '$SOURCE_FILE_PATH' found. Attempting to copy."
-            DESTINATION_FILE_PATH="${TARGET_NIXOS_CONFIG_DIR}/zellij_config/${user_cfg_file}"
-            if sudo cp "$SOURCE_FILE_PATH" "$DESTINATION_FILE_PATH"; then
-                echo "LOG: ${user_cfg_file} copied successfully to ${TARGET_NIXOS_CONFIG_DIR}/zellij_config/."
-                echo "DEBUG: Verifying copied file at '${DESTINATION_FILE_PATH}':"
-                ls -la "$DESTINATION_FILE_PATH" || echo "DEBUG: Verification ls failed for ${DESTINATION_FILE_PATH} (file likely not copied)"
-            else
-                echo "WARNING: Failed to copy '${SOURCE_FILE_PATH}' to '${DESTINATION_FILE_PATH}'."
-            fi
-        else
-            echo "WARNING: Source KDL file NOT FOUND: '${SOURCE_FILE_PATH}'"
-        fi
-    done
-else
-    echo "WARNING: Source KDL file directory ('$USER_CONFIG_FILES_DIR') NOT FOUND. Zellij KDL configs may be missing."
-fi
+# --- Entire block for copying Zellij KDL files has been removed ---
 
 echo "All NixOS configuration files generated and placed in ${TARGET_NIXOS_CONFIG_DIR}/."
 echo "--------------------------------------------------------------------"
