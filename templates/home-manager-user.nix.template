@@ -103,7 +103,7 @@ in
       keyboard.bindings = [
         { key = "V"; mods = "Control"; action = "Paste"; }
       ];
-      shell = {
+      terminal.shell = {
         program = "${lib.getExe pkgs.zsh}";
         args = [
           "-c"
