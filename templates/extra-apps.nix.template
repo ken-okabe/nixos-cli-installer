@@ -18,7 +18,7 @@
 
     # Graphics and Media
     gimp            # GNU Image Manipulation Program
-    losslesscut     # Tool for lossless trimming/cutting of video and audio files
+    losslesscut-bin # Tool for lossless trimming/cutting of video and audio files
                     # (Verify exact attribute name in Nixpkgs, e.g., 'losslesscut' or 'losslesscut-bin')
     mcomix          # Comic book reader
 
