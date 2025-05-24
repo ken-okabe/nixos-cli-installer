@@ -28,10 +28,10 @@
 
     # Variables to be replaced by the install script.
     # These are passed as specialArgs to NixOS and Home Manager modules.
-    nixosUsername = "__NIXOS_USERNAME__"; # Placeholder for the main system username.
-    gitUsername = "__GIT_USERNAME__";     # Placeholder for the Git commit username.
-    gitUseremail = "__GIT_USEREMAIL__";   # Placeholder for the Git commit email.
-    hostname = "__HOSTNAME__";            # Placeholder for the system hostname.
+    nixosUsername = "ken"; # Placeholder for the main system username.
+    gitUsername = "ken-okabe";     # Placeholder for the Git commit username.
+    gitUseremail = "kentechgeek@gmail.com";   # Placeholder for the Git commit email.
+    hostname = "nixos";            # Placeholder for the system hostname.
   in
   {
     # Define the NixOS system configuration.
@@ -62,14 +62,13 @@
         ./users.nix                  # User accounts, passwords, sudo.
         ./system-packages.nix        # Base system-wide packages.
         ./extra-apps.nix             # Additional user applications.
-        ./fonts-ime.nix              # Fonts and Input Method Editor (Fcitx5).
-
+        ./fonts-ime.nix              # Fonts and input Method Editor (Fcitx5).
         # Desktop Environment.
         ./gnome-desktop.nix          # GNOME Desktop Environment configuration.
 
         # Key remapping (NixOS system-level).
         inputs.xremap-flake.nixosModules.default # Import xremap's NixOS module.
-        ./xremap.nix                             # Your specific xremap configuration for NixOS.
+        ./key-remap.nix                             # Your specific xremap configuration for NixOS.
 
         # Home Manager integration for user-specific configurations.
         home-manager.nixosModules.home-manager # Enable the Home Manager NixOS module.
