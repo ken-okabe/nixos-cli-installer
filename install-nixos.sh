@@ -326,7 +326,37 @@ echo "--------------------------------------------------------------------"
 
 # --- 4. Generate Flake and Custom Module Files from Templates ---
 echo "Step 4: Generating Flake and custom NixOS module files..."
+
+# === MODIFIED PART: Cleanup TARGET_NIXOS_CONFIG_DIR ===
+echo "LOG: Ensuring ${TARGET_NIXOS_CONFIG_DIR} is clean before generating new configuration files."
+# This assumes /mnt is already mounted from Step 2.
+# We are cleaning the *contents* of /mnt/etc/nixos, not unmounting /mnt itself.
+if [ -d "${TARGET_NIXOS_CONFIG_DIR}" ]; then
+    echo "LOG: Directory ${TARGET_NIXOS_CONFIG_DIR} exists. Clearing its contents..."
+    # Using find to delete contents. This is safer than rm -rf *
+    # It deletes all files and directories directly under TARGET_NIXOS_CONFIG_DIR
+    # but not TARGET_NIXOS_CONFIG_DIR itself.
+    # The path is quoted and uses :? to prevent accidental deletion if variable is unset.
+    if sudo find "${TARGET_NIXOS_CONFIG_DIR:?}" -mindepth 1 -delete; then
+        echo "LOG: Contents of ${TARGET_NIXOS_CONFIG_DIR} cleared successfully."
+    else
+        # find might return non-zero if directory was already empty or for other reasons
+        # but we still want to proceed with mkdir -p.
+        # Check if it's empty now.
+        if [ -z "$(sudo ls -A "${TARGET_NIXOS_CONFIG_DIR}")" ]; then
+            echo "LOG: ${TARGET_NIXOS_CONFIG_DIR} is now empty."
+        else
+            echo "WARN: Failed to clear all contents of ${TARGET_NIXOS_CONFIG_DIR}, or it was not empty after find. Manual check might be needed."
+        fi
+    fi
+else
+    echo "LOG: Directory ${TARGET_NIXOS_CONFIG_DIR} does not exist yet, no need to clear."
+fi
+# Ensure the directory exists (original command from script)
 log_sudo_cmd mkdir -p "${TARGET_NIXOS_CONFIG_DIR}"
+echo "LOG: Ensured ${TARGET_NIXOS_CONFIG_DIR} exists."
+# === END OF MODIFIED PART ===
+
 
 generate_from_template() {
     local template_file_basename="$1"
@@ -371,15 +401,15 @@ generate_from_template() {
             sudo chmod 644 "$output_path"
         else
             echo "ERROR: Failed to move temporary file to ${output_path} (sudo mv \"$temp_output\" \"$output_path\")."
-            rm -f "$temp_output"
+            rm -f "$temp_output" # Ensure temp file is cleaned up on error
             return 1
         fi
     else
         echo "ERROR: sed command failed for generating ${output_file_basename} from ${template_file_basename}."
-        rm -f "$temp_output"
+        rm -f "$temp_output" # Ensure temp file is cleaned up on error
         return 1
     fi
-    return 0
+    # No explicit return 0 needed due to set -e; successful completion implies 0.
 }
 
 # List of templates and their corresponding output file names.
@@ -406,7 +436,7 @@ for item in "${module_templates[@]}"; do
     IFS=":" read -r template_name output_name <<< "$item" # Split "template:output"
     if ! generate_from_template "$template_name" "$output_name"; then
         echo "ERROR: Failed to generate ${output_name}. Aborting installation."
-        exit 1
+        exit 1 # Exit immediately if template generation fails
     fi
 done
 
@@ -418,6 +448,7 @@ echo "DEBUG: USER_CONFIG_FILES_DIR (source for KDLs) is: '${USER_CONFIG_FILES_DI
 
 if [[ -d "$USER_CONFIG_FILES_DIR" ]]; then
     echo "DEBUG: Source directory for KDL files '$USER_CONFIG_FILES_DIR' exists."
+    # Ensure zellij_config subdir is created (it should be under TARGET_NIXOS_CONFIG_DIR which was just ensured)
     log_sudo_cmd mkdir -p "${TARGET_NIXOS_CONFIG_DIR}/zellij_config"
 
     # MODIFIED: Iterate over filenames with leading dot
