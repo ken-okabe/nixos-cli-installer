@@ -8,10 +8,9 @@
   i18n.inputMethod = {
     enabled = "fcitx5"; # Enable Fcitx5 as the IME framework.
     fcitx5.addons = with pkgs; [
-      fcitx5-mozc         # Mozc engine for Japanese input.
-      fcitx5-configtool   # GUI configuration tool for Fcitx5.
+      fcitx5-mozc-ut         # Mozc engine for Japanese input.
       fcitx5-gtk          # GTK integration modules for Fcitx5.
-      fcitx5-qt           # Qt integration modules for Fcitx5.
+      fcitx5-nord  
     ];
   };
 
