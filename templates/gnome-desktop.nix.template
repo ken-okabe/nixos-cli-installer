@@ -19,17 +19,5 @@
   # This is often enabled by default when GNOME is enabled, but explicit is fine.
   programs.xwayland.enable = true;
 
-  # Optional: Exclude certain default GNOME packages if you don't need them.
-  environment.gnome.excludePackages = with pkgs; [
-    gnome-tour
-    gnome-photos
-    # Add other packages you wish to exclude from the default GNOME set.
-  ] ++ (with pkgs.gnome; [
-    cheese # Webcam application
-    epiphany # GNOME Web browser
-    geary # Email client
-    gnome-music
-    totem # Video player
-    # evolution # Consider if you don't use Evolution for email/calendar
-  ]);
+  # Optional: Exclude certain default GNOME packages 
 }
