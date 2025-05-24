@@ -23,25 +23,25 @@ confirm() {
     else
         echo "DEVELOPER ERROR: confirm function called with invalid default_response_char: '$default_response_char'. Assuming 'N' as a safe default." >&2
         prompt_display="[y/N]"
-        default_response_char="N" 
+        default_response_char="N"
     fi
 
     while true; do
         read -r -p "${question} ${prompt_display}: " response
         local response_lower
-        response_lower=$(echo "$response" | tr '[:upper:]' '[:lower:]') 
+        response_lower=$(echo "$response" | tr '[:upper:]' '[:lower:]')
 
         case "$response_lower" in
             y|yes)
-                return 0 
+                return 0
                 ;;
             n|no)
                 echo "You selected 'No'. The question will be asked again. Press Ctrl+C to abort the script if you do not wish to proceed."
                 ;;
-            "") 
+            "")
                 if [[ "$default_response_char" == "Y" ]]; then
-                    return 0 
-                else 
+                    return 0
+                else
                     echo "Default is 'No' (Enter pressed). The question will be asked again. Press Ctrl+C to abort."
                 fi
                 ;;
@@ -54,12 +54,12 @@ confirm() {
 
 log_cmd() {
     echo "LOG: CMD: $*"
-    "$@" 
+    "$@"
 }
 
 log_sudo_cmd() {
     echo "LOG: SUDO CMD: $*"
-    sudo "$@" 
+    sudo "$@"
 }
 
 # --- 0. Preamble and Critical Warning ---
@@ -85,14 +85,14 @@ echo "--------------------------------------------------------------------"
 echo "Step 1: Gathering information..."
 echo ""
 echo "Available block devices (physical disks, not partitions):"
-lsblk -pno NAME,SIZE,MODEL 
+lsblk -pno NAME,SIZE,MODEL
 echo ""
 while true; do
     read -r -p "Enter the target disk for NixOS installation (e.g., /dev/sda, /dev/nvme0n1): " TARGET_DISK
-    if [[ -b "$TARGET_DISK" ]]; then 
+    if [[ -b "$TARGET_DISK" ]]; then
         TARGET_DISK_PROMPT="You have selected '$TARGET_DISK'. ALL DATA ON THIS DISK WILL BE ERASED! Are you absolutely sure?"
-        confirm "$TARGET_DISK_PROMPT" "N" 
-        break 
+        confirm "$TARGET_DISK_PROMPT" "N"
+        break
     else
         echo "Error: '$TARGET_DISK' is not a valid block device. Please try again."
     fi
@@ -109,7 +109,7 @@ echo "LOG: SWAP_SIZE_GB=${SWAP_SIZE_GB}, DEFAULT_EFI_SIZE_MiB=${DEFAULT_EFI_SIZE
 echo "LOG: EFI_PART_NAME=${EFI_PART_NAME}, SWAP_PART_NAME=${SWAP_PART_NAME}, ROOT_PART_NAME=${ROOT_PART_NAME}, DEFAULT_ROOT_FS_TYPE=${DEFAULT_ROOT_FS_TYPE}"
 
 # These will be defined later, but declare them for the initial swapoff attempt
-SWAP_DEVICE_NODE="" 
+SWAP_DEVICE_NODE=""
 
 echo ""
 read -r -p "Enter the desired username for the primary system user (e.g., ken): " NIXOS_USERNAME
@@ -185,7 +185,7 @@ echo "Step 2: Starting disk partitioning, formatting, and mounting on $TARGET_DI
 echo "This will ERASE ALL DATA on $TARGET_DISK."
 confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK?" "N"
 
-{ 
+{
     echo "LOG: Attempting to unmount target filesystems and turn off swap if active..."
     if mountpoint -q /mnt/boot; then
         echo "LOG: /mnt/boot is mounted. Attempting to unmount..."
@@ -195,23 +195,23 @@ confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK?" "N"
         echo "LOG: /mnt is mounted. Attempting to unmount..."
         sudo umount /mnt || echo "WARN: Failed to unmount /mnt. It might be busy."
     fi
-    
+
     # Try to turn off swap using the name that *will be* assigned.
     # This helps if the script is re-run after a partial success where swap was activated.
     if [[ -n "$SWAP_PART_NAME" ]]; then
         echo "LOG: Attempting to swapoff by label $SWAP_PART_NAME (if it exists from a previous run)..."
-        sudo swapoff -L "$SWAP_PART_NAME" &>/dev/null || true 
+        sudo swapoff -L "$SWAP_PART_NAME" &>/dev/null || true
     fi
     # Also try to turn off all swap as a general measure, but ignore errors.
     echo "LOG: Attempting to swapoff all active swap partitions (swapoff -a)..."
     sudo swapoff -a &>/dev/null || true
 
     echo "LOG: Finished attempting to unmount and turn off swap."
-    sleep 2 
+    sleep 2
 
     echo "LOG: Using sgdisk to zap all existing GPT data and partitions on $TARGET_DISK..."
     log_sudo_cmd sgdisk --zap-all "$TARGET_DISK"
-    
+
     echo "LOG: Informing kernel of partition table changes after zapping..."
     sync
     log_sudo_cmd partprobe "$TARGET_DISK" || echo "WARN: partprobe after sgdisk --zap-all failed, proceeding with caution."
@@ -224,9 +224,9 @@ confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK?" "N"
     echo "-------------------------------------"
 
     echo "LOG: Creating new GPT partition table on $TARGET_DISK..."
-    log_sudo_cmd parted --script "$TARGET_DISK" mklabel gpt 
+    log_sudo_cmd parted --script "$TARGET_DISK" mklabel gpt
     echo "LOG: New GPT partition table created."
-    
+
     echo "LOG: Informing kernel of new GPT label..."
     sync
     log_sudo_cmd partprobe "$TARGET_DISK" || echo "WARN: partprobe after mklabel gpt failed."
@@ -346,7 +346,7 @@ confirm "FINAL WARNING: Proceed with partitioning $TARGET_DISK?" "N"
     # Try to unmount target mount points specifically
     if mountpoint -q /mnt/boot; then sudo umount -l /mnt/boot &>/dev/null || true; fi
     if mountpoint -q /mnt; then sudo umount -l /mnt &>/dev/null || true; fi
-    
+
     # Try to swapoff specific device/label if variables were set
     if [[ -n "$SWAP_DEVICE_NODE" && -e "$SWAP_DEVICE_NODE" ]]; then
         sudo swapoff "$SWAP_DEVICE_NODE" &>/dev/null || true
@@ -369,6 +369,8 @@ echo "LOG: hardware-configuration.nix generated at ${TARGET_NIXOS_CONFIG_DIR}/ha
 if [ -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix" ]; then
     echo "Note: A base configuration.nix was also generated by nixos-generate-config."
     echo "      This base configuration.nix will NOT be used by our Flake if not explicitly listed in flake.nix's modules."
+    echo "LOG: Removing the generated base ${TARGET_NIXOS_CONFIG_DIR}/configuration.nix as it is not used." # MODIFIED
+    log_sudo_cmd rm -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix" # MODIFIED
 fi
 echo "--------------------------------------------------------------------"
 
@@ -420,12 +422,12 @@ generate_from_template() {
             sudo chmod 644 "$output_path"
         else
             echo "ERROR: Failed to move temporary file to ${output_path} (sudo mv \"$temp_output\" \"$output_path\")."
-            rm -f "$temp_output" 
+            rm -f "$temp_output"
             return 1
         fi
     else
         echo "ERROR: sed command failed for generating ${output_file_basename} from ${template_file_basename}."
-        rm -f "$temp_output" 
+        rm -f "$temp_output"
         return 1
     fi
 }
@@ -449,10 +451,10 @@ declare -a module_templates=(
 )
 
 for item in "${module_templates[@]}"; do
-    IFS=":" read -r template_name output_name <<< "$item" 
+    IFS=":" read -r template_name output_name <<< "$item"
     if ! generate_from_template "$template_name" "$output_name"; then
         echo "ERROR: Failed to generate ${output_name}. Aborting installation."
-        exit 1 
+        exit 1
     fi
 done
 
