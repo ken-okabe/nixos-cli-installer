@@ -25,13 +25,37 @@
   # By enabling this, you acknowledge and accept the terms of these licenses.
   nixpkgs.config.allowUnfree = true;
 
-  # 4. Enable Flakes and new Nix command support system-wide.
-  # This ensures that the installed NixOS system itself is configured to use Flakes,
-  # which is essential for a Flake-managed setup.
-  nix.settings.experimental-features = [ "nix-command" "flakes" ];
+  # 4. Nix Settings (including experimental features and performance tuning)
+  nix.settings = {
+    # Enable Flakes and new Nix command support system-wide.
+    experimental-features = [ "nix-command" "flakes" ];
 
-  # Optional: Optimize Nix store after builds.
-  # This can save some disk space by deduplicating identical files in the Nix store.
-  # It might slightly increase build times.
-  # nix.settings.auto-optimise-store = true;
+    # Optional: Optimize Nix store after builds.
+    # This can save some disk space by deduplicating identical files in the Nix store.
+    # It might slightly increase build times.
+    # auto-optimise-store = true; # Kept commented as in your base code.
+
+    # --- Nix Daemon Settings for Download Performance ---
+    # Increase download buffer size to 500MB, as per discussion from GitHub issue.
+    # CRITICAL CAUTION: This is a VERY large value. It WILL consume significant RAM
+    # if many downloads occur in parallel (potentially 500MB * http-connections).
+    # Monitor system RAM usage very carefully. If your system has limited RAM
+    # (e.g., less than 16GB, or depending on other running processes), this could
+    # lead to swapping and SEVERELY DEGRADE performance or cause instability.
+    # If issues arise, IMMEDIATELY try much smaller, more conservative values like:
+    #   16777216 (16MB), 33554432 (32MB), or 67108864 (64MB).
+    download-buffer-size = 524288000; # 500 * 1024 * 1024 bytes
+
+    # Increase the number of parallel HTTP connections for downloads to 100.
+    # CAUTION: This is a high number. It might strain your network or the
+    # substituter server. Monitor if it provides actual benefits.
+    # Default is typically 25.
+    http-connections = 100;
+
+    # Set max-jobs for builds.
+    # "auto" (or 0) uses the number of CPU cores, which is generally recommended.
+    # If you want to set it to double your CPU cores (e.g., for an 8-core CPU, set to 16),
+    # replace "auto" with that specific number after checking your core count (e.g., with `nproc`).
+    max-jobs = "auto"; # Or your calculated value, e.g., 16
+  };
 }
