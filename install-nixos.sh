@@ -432,6 +432,7 @@ generate_from_template() {
     fi
 }
 
+# install-nixos.sh の一部を修正 (前回提案の再掲)
 declare -a module_templates=(
     "flake.nix.template:flake.nix"
     "system-settings.nix.template:system-settings.nix"
@@ -439,13 +440,13 @@ declare -a module_templates=(
     "system-packages.nix.template:system-packages.nix"
     "extra-apps.nix.template:extra-apps.nix"
     "gnome-desktop.nix.template:gnome-desktop.nix"
-    "ime-and-fonts.nix.template:ime-and-fonts.nix"
+    "fonts-ime.nix.template:fonts-ime.nix"
     "sound.nix.template:sound.nix"
     "networking.nix.template:networking.nix"
     "bluetooth.nix.template:bluetooth.nix"
     "virtualbox-guest.nix.template:virtualbox-guest.nix"
     "system-customizations.nix.template:system-customizations.nix"
-    "xremap.nix.template:xremap.nix"
+    "key-remap.nix.template:key-remap.nix"
     "bootloader.nix.template:bootloader.nix"
     "home-manager-user.nix.template:home-manager-user.nix"
 )
