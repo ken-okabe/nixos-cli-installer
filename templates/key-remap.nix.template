@@ -13,48 +13,6 @@ let
   username = nixosUsername;
 in
 {
-  # === xremap Service Configuration ===
-  # For application-level key remapping.
-  services.xremap = {
-    enable = true;
-    withGnome = true; # For better integration with GNOME Wayland
-    serviceMode = "user"; # Runs as a user service
-    userName = username;  # Specifies the user for the service
-
-    # xremap configuration
-    config = {
-      # `modmap` is for single key to single key remapping.
-      modmap = [
-        {
-          name = "Global Key Swaps";
-          remap = {
-            "CapsLock" = "Ctrl_L"; # Remap CapsLock to Left Control
-          };
-        }
-      ];
-
-      # `keymap` is for more complex remappings, including to key combinations.
-      # This approach adds a 'name' to each mapping for clarity.
-      keymap = [
-        {
-          name = "Magic Keyboard Fn Key to Ctrl-F9";
-          remap = {
-            # Ensure "KEY_FN" is how xremap recognizes this key.
-            # Use `evtest` or `wev` to find the correct key name if unsure.
-            "KEY_FN" = "Ctrl-F9";
-          };
-        }
-        {
-          name = "Magic Keyboard Coffee/Eject Key to Ctrl-F10";
-          remap = {
-            # Ensure "KEY_COFFEE" is how xremap recognizes this key.
-            "KEY_COFFEE" = "Ctrl-F10";
-          };
-        }
-      ];
-    };
-  };
-
   # === Apple Keyboard Specific Kernel Module Options ===
   # Sets F1-F12 keys to work as standard function keys by default.
   # Media keys are accessed by pressing Fn + Fx.
