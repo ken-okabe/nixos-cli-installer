@@ -9,10 +9,6 @@
     # Core utilities
     git       # Version control system (also configured per-user via Home Manager)
 
-    # Terminals & Multiplexers (installed system-wide, configured per-user via Home Manager)
-    alacritty # GPU-accelerated terminal emulator
-    zellij    # Terminal multiplexer
-
     # GNOME specific tools
     gnome-extension-manager           # To manage GNOME Shell Extensions
     gnome-tweaks                      # For advanced GNOME settings customization
