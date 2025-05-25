@@ -1,9 +1,9 @@
-# /templates/key-remap.nix.template
+# /templates/key-remap.nix
 #
 # Configures overall key remapping and keyboard behavior.
 # This includes:
-#   - Key remapping using xremap (requires xremap-flake).
 #   - Apple Keyboard Fn key behavior (via kernel module parameter).
+#   - Key remapping using keyd for Magic Keyboard and CapsLock.
 #
 # For xremap: ensure `inputs.xremap-flake.nixosModules.default` is included in
 # your flake.nix's `modules` list for the NixOS configuration.
@@ -13,6 +13,25 @@ let
   username = nixosUsername;
 in
 {
+  # === Key Remapping using Keyd ===
+  # Keyd is a general-purpose keyboard remapping daemon that operates at a low level,
+  # independent of Xorg or Wayland, offering a more flexible configuration than udev hwdb.
+  services.keyd.enable = true;
+
+  services.keyd.keyboards = {
+    # Global settings: Remap CapsLock to Left Control for all keyboards.
+    default = {
+      ids = [ "*" ]; # Apply to all connected keyboards.
+      settings = {
+        # "main" is the section name.
+        main = {
+          # "capslock" is the key, "leftcontrol" is the value.
+          capslock = "leftcontrol";
+        };
+      };
+    };
+
+  };
   # === Apple Keyboard Specific Kernel Module Options ===
   # Sets F1-F12 keys to work as standard function keys by default.
   # Media keys are accessed by pressing Fn + Fx.
@@ -21,5 +40,4 @@ in
     options hid_apple fnmode=2
   ''; # Note: fnmode=2 might be default on some newer kernels/systems.
 
-  # The xremap package itself is typically managed by the xremap-flake NixOS module.
 }
