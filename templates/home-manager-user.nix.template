@@ -63,7 +63,7 @@ in
     syntaxHighlighting.enable = true; # Provided by zsh-syntax-highlighting plugin
     autocd = true;
     shellAliases = {
-      ll = "ls -l";
+      ll = "ls -la -F --color=auto --group-directories-first";
       update-system = "sudo nixos-rebuild switch --flake /etc/nixos#${hostname}";
     };
     initContent = ''
@@ -116,8 +116,10 @@ in
       keybind = [
         # Copy/Paste
         "ctrl+shift+c=copy_to_clipboard"
-        "ctrl+v=paste_from_clipboard"
         "ctrl+shift+v=paste_from_clipboard"
+
+        "ctrl+g=copy_to_clipboard"
+        "ctrl+v=paste_from_clipboard"
 
         # Pane/Split navigation and manipulation
         "ctrl+left=goto_split:left"
