@@ -150,21 +150,6 @@ in
     # installBatSyntax = true;
   };
 
-  # xremap configuration via Home Manager.
-  services.xremap = {
-    enable = true;
-    config = {
-      modmap = [
-        {
-          name = "User Global Remaps";
-          remap = {
-            "CapsLock" = "Ctrl_L";
-          };
-        }
-      ];
-    };
-  };
-
   # Standard XDG user directories.
   xdg.userDirs.enable = true;
   xdg.userDirs.createDirectories = true;
