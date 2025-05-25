@@ -13,14 +13,6 @@
       inputs.nixpkgs.follows = "nixpkgs"; # Ensure Home Manager uses the same Nixpkgs.
     };
 
-    # xremap-flake for advanced key remapping.
-    xremap-flake = {
-      url = "github:xremap/nix-flake";
-      inputs.nixpkgs.follows = "nixpkgs"; # Ensure consistency with system's Nixpkgs.
-    };
-    # Add other Flake inputs here if needed in the future.
-  };
-
   outputs = { self, nixpkgs, home-manager, xremap-flake, ... }@inputs:
   let
     # System architecture.
@@ -43,7 +35,7 @@
         inherit inputs;
         # Pass specific custom arguments to the modules.
         inherit nixosUsername gitUsername gitUseremail hostname; # Added hostname here as well
-        # xremap-flake is available via 'inputs.xremap-flake'.
+        
       };
       modules = [
         # Core hardware and boot configuration.
@@ -66,8 +58,7 @@
         # Desktop Environment.
         ./gnome-desktop.nix          # GNOME Desktop Environment configuration.
 
-        # Key remapping (NixOS system-level).
-        inputs.xremap-flake.nixosModules.default # Import xremap's NixOS module.
+        # Key remapping (NixOS system-level)
         ./key-remap.nix                             # Your specific xremap configuration for NixOS.
 
         # Home Manager integration for user-specific configurations.
@@ -85,8 +76,6 @@
           # Specify the Home Manager configuration for the primary user.
           home-manager.users.${nixosUsername} = {
             imports = [
-              # Import xremap's Home Manager module.
-              inputs.xremap-flake.homeManagerModules.default
               # Import your existing user-specific configurations.
               (import ./home-manager-user.nix)
             ];
