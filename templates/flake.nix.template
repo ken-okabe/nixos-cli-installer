@@ -16,7 +16,7 @@
 
   }; # Added semicolon based on common Nix flake structure, assuming 'outputs' follows. If this was the absolute last attribute in a prior version of the full file, it might have been optional.
 
-  outputs = { self, nixpkgs, home-manager, xremap-flake, ... }@inputs:
+  outputs = { self, nixpkgs, home-manager, ... }@inputs:
   let
     # System architecture.
     system = "x86_64-linux";
