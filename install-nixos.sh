@@ -194,27 +194,18 @@ echo "--------------------------------------------------------------------"
 
 # --- 2. Disk Partitioning, Formatting, and Mounting (using sfdisk) ---
 echo "Step 2: Starting disk partitioning, formatting, and mounting on $TARGET_DISK..."
-# Warning about erasing data is already part of the TARGET_DISK confirmation.
-# The FINAL WARNING confirmation can be kept here before actual operations.
 confirm "FINAL WARNING: ALL DATA ON '$TARGET_DISK' WILL BE ERASED. Proceed with partitioning?" "N"
 
 { # Start of try-block for disk operations
 
-    # Check and unmount /mnt and /mnt/boot if they are in use by other devices.
     echo "LOG: Checking and preparing /mnt and /mnt/boot mount points..."
-    MOUNT_POINTS_TO_CLEAN=("/mnt/boot" "/mnt") # Check /mnt/boot first as it's potentially a child of /mnt
+    MOUNT_POINTS_TO_CLEAN=("/mnt/boot" "/mnt")
     for mp_to_clean in "${MOUNT_POINTS_TO_CLEAN[@]}"; do
         if mountpoint -q "$mp_to_clean"; then
             current_mounted_device=$(findmnt -n -o SOURCE --target "$mp_to_clean")
             echo "INFO: '$mp_to_clean' is currently mounted by '$current_mounted_device'."
-            # Check if the mounted device is a partition of the TARGET_DISK itself
-            # This simple check assumes target disk partitions start with TARGET_DISK name (e.g. /dev/sda1 for /dev/sda)
-            # For loop devices, this check might need adjustment if device nodes are not predictable,
-            # but for now, we assume direct partitions.
             is_target_disk_partition=false
             if [[ "$current_mounted_device" == "$TARGET_DISK"* ]]; then
-                 # Further check if it's actually a partition and not the whole disk if TARGET_DISK itself can be mounted.
-                 # For loop0p1, current_mounted_device=/dev/loop0p1, TARGET_DISK=/dev/loop0. This matches.
                 is_target_disk_partition=true
             fi
 
@@ -223,7 +214,6 @@ confirm "FINAL WARNING: ALL DATA ON '$TARGET_DISK' WILL BE ERASED. Proceed with 
                  echo "       This might be from a previous incomplete run. Attempting to unmount..."
                  log_sudo_cmd umount -f "$mp_to_clean" || echo "WARN: Failed to unmount '$mp_to_clean' (part of target disk). It might be busy or already unmounted."
             else
-                # If mounted by a device not part of the target disk, ask user.
                 if confirm "Mount point '$mp_to_clean' is in use by '$current_mounted_device' (not the target disk). Unmount it to proceed with installation?" "N"; then
                     log_sudo_cmd umount -f "$mp_to_clean" || { echo "ERROR: Failed to unmount '$mp_to_clean'. Please unmount it manually and restart the script." >&2; exit 1; }
                     echo "LOG: '$mp_to_clean' unmounted."
@@ -238,34 +228,27 @@ confirm "FINAL WARNING: ALL DATA ON '$TARGET_DISK' WILL BE ERASED. Proceed with 
         fi
     done
 
-    # Attempt to turn off swap related to the target disk or system-wide as a precaution.
     echo "LOG: Attempting to turn off swap if active..."
     if [[ -n "$SWAP_PART_NAME" ]]; then
         echo "LOG: Attempting to swapoff by label $SWAP_PART_NAME (if it exists from a previous run)..."
-        sudo swapoff -L "$SWAP_PART_NAME" &>/dev/null || true # Ignore errors, might not exist
+        sudo swapoff -L "$SWAP_PART_NAME" &>/dev/null || true
     fi
-    # Also try to turn off all swap as a general measure.
-    # This is aggressive but can help if specific swap partitions on the target are hard to identify before partitioning.
     echo "LOG: Attempting to swapoff all active swap partitions (swapoff -a) as a general measure..."
-    sudo swapoff -a &>/dev/null || true # Ignore errors
+    sudo swapoff -a &>/dev/null || true
     echo "LOG: Finished attempting to turn off swap."
-    sleep 2 # Give system a moment to process unmounts/swapoff
+    sleep 2
 
-    # Get total disk size in MiB using blockdev for accuracy
     TOTAL_DISK_BYTES=$(sudo blockdev --getsize64 "$TARGET_DISK")
     if ! [[ "$TOTAL_DISK_BYTES" =~ ^[0-9]+$ ]] || [ "$TOTAL_DISK_BYTES" -eq 0 ]; then
         echo "Error: Could not determine total disk size in bytes for $TARGET_DISK from blockdev."
         exit 1
     fi
-    TOTAL_DISK_MiB=$((TOTAL_DISK_BYTES / 1024 / 1024)) # Integer division for MiB
+    TOTAL_DISK_MiB=$((TOTAL_DISK_BYTES / 1024 / 1024))
     echo "LOG: Total disk size (for sfdisk calculations): ${TOTAL_DISK_MiB}MiB"
 
-    # Calculate partition sizes and offsets in MiB
-    EFI_START_OFFSET_MiB="1" # 1MiB offset for GPT alignment and bootloader space
+    EFI_START_OFFSET_MiB="1"
     EFI_SIZE_MiB_ACTUAL="${DEFAULT_EFI_SIZE_MiB}"
-
-    SWAP_SIZE_REQUESTED_MiB_INT=$((SWAP_SIZE_GB * 1024)) # Convert GB to MiB
-
+    SWAP_SIZE_REQUESTED_MiB_INT=$((SWAP_SIZE_GB * 1024))
     ROOT_START_OFFSET_MiB_ACTUAL="$((EFI_START_OFFSET_MiB + EFI_SIZE_MiB_ACTUAL))"
     ROOT_END_OFFSET_MiB_ACTUAL="$((TOTAL_DISK_MiB - SWAP_SIZE_REQUESTED_MiB_INT))"
     ROOT_SIZE_MiB_ACTUAL="$((ROOT_END_OFFSET_MiB_ACTUAL - ROOT_START_OFFSET_MiB_ACTUAL))"
@@ -278,7 +261,7 @@ confirm "FINAL WARNING: ALL DATA ON '$TARGET_DISK' WILL BE ERASED. Proceed with 
     fi
     CALCULATED_TOTAL_ALLOCATED_MiB=$((EFI_START_OFFSET_MiB + EFI_SIZE_MiB_ACTUAL + ROOT_SIZE_MiB_ACTUAL + SWAP_SIZE_REQUESTED_MiB_INT))
     if [ "$CALCULATED_TOTAL_ALLOCATED_MiB" -gt "$TOTAL_DISK_MiB" ]; then
-        if [ "$((CALCULATED_TOTAL_ALLOCATED_MiB - TOTAL_DISK_MiB))" -gt 4 ]; then # Allow up to 4MiB discrepancy
+        if [ "$((CALCULATED_TOTAL_ALLOCATED_MiB - TOTAL_DISK_MiB))" -gt 4 ]; then
             echo "Error: Calculated total partition allocation (${CALCULATED_TOTAL_ALLOCATED_MiB}MiB) significantly exceeds disk size (${TOTAL_DISK_MiB}MiB)."
             exit 1
         else
@@ -292,13 +275,20 @@ confirm "FINAL WARNING: ALL DATA ON '$TARGET_DISK' WILL BE ERASED. Proceed with 
     ROOT_TYPE_GUID="0FC63DAF-8483-4772-8E79-3D69D8477DE4"
     SWAP_TYPE_GUID="0657FD6D-A4AB-43C4-84E5-0933C84B4F4F"
 
+    # Determine partition device node suffixes
     PART_SUFFIX_1="1"; PART_SUFFIX_2="2"; PART_SUFFIX_3="3"
-    if [[ "$TARGET_DISK" == /dev/nvme* ]]; then
+    # NVMe drives (e.g., /dev/nvme0n1) and loop devices (e.g. /dev/loop0)
+    # typically use 'p' as a separator for partition numbers.
+    # Other devices like /dev/sda, /dev/sdb usually don't.
+    if [[ "$TARGET_DISK" == /dev/nvme* || "$TARGET_DISK" == /dev/loop* ]]; then # Corrected condition
         PART_SUFFIX_1="p1"; PART_SUFFIX_2="p2"; PART_SUFFIX_3="p3"
     fi
     EFI_DEVICE_NODE="${TARGET_DISK}${PART_SUFFIX_1}"
     ROOT_DEVICE_NODE="${TARGET_DISK}${PART_SUFFIX_2}"
     SWAP_DEVICE_NODE="${TARGET_DISK}${PART_SUFFIX_3}"
+    echo "LOG: EFI Device Node will be: ${EFI_DEVICE_NODE}" # Log for debugging
+    echo "LOG: Root Device Node will be: ${ROOT_DEVICE_NODE}" # Log for debugging
+    echo "LOG: Swap Device Node will be: ${SWAP_DEVICE_NODE}" # Log for debugging
 
 SFDISK_INPUT=$(cat <<EOF
 label: gpt
@@ -341,35 +331,41 @@ EOF
     lsblk -fpo NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT,PARTLABEL,PTTYPE,PARTTYPE "$TARGET_DISK"
     echo "-------------------------------------"
 
-    echo "LOG: Proceeding to format partitions..."
+    echo "LOG: Proceeding to format partitions using correct device nodes: $EFI_DEVICE_NODE, $ROOT_DEVICE_NODE, $SWAP_DEVICE_NODE"
     log_sudo_cmd mkfs.vfat -F 32 -n "$EFI_PART_NAME" "$EFI_DEVICE_NODE"
     log_sudo_cmd mkfs."$DEFAULT_ROOT_FS_TYPE" -F -L "$ROOT_PART_NAME" "$ROOT_DEVICE_NODE"
     log_sudo_cmd mkswap -f -L "$SWAP_PART_NAME" "$SWAP_DEVICE_NODE"
     echo "LOG: Partitions have been formatted."
 
-    echo "LOG: Mounting NixOS root filesystem (partition with label ${ROOT_PART_NAME}) to /mnt..."
-    log_sudo_cmd mount -L "$ROOT_PART_NAME" /mnt
+    echo "LOG: Mounting NixOS root filesystem ($ROOT_DEVICE_NODE with label ${ROOT_PART_NAME}) to /mnt..."
+    log_sudo_cmd mount "$ROOT_DEVICE_NODE" /mnt # Prefer mounting by device node after creation for reliability
     # Verify root mount
-    if ! mountpoint -q /mnt || [[ "$(findmnt -n -o SOURCE --target /mnt)" != "$ROOT_DEVICE_NODE" && "$(findmnt -n -o SOURCE --target /mnt)" != "/dev/disk/by-label/$ROOT_PART_NAME" ]]; then
-        echo "ERROR: Failed to mount root partition ($ROOT_PART_NAME or $ROOT_DEVICE_NODE) to /mnt."
-        echo "       Currently mounted on /mnt: $(findmnt -n -o SOURCE --target /mnt || echo "nothing")"
+    mounted_root_device=$(findmnt -n -o SOURCE --target /mnt || echo "none")
+    if ! mountpoint -q /mnt || [[ "$mounted_root_device" != "$ROOT_DEVICE_NODE" ]]; then
+        echo "ERROR: Failed to mount root partition ($ROOT_DEVICE_NODE) to /mnt."
+        echo "       Attempted to mount: $ROOT_DEVICE_NODE. Actually mounted on /mnt: $mounted_root_device"
+        echo "       Ensure $ROOT_DEVICE_NODE was created and formatted correctly."
+        lsblk -fpo NAME,SIZE,FSTYPE,LABEL,PARTLABEL,PTTYPE,PARTTYPE "$TARGET_DISK" # Show state for debug
         exit 1
     fi
-    echo "LOG: Root filesystem mounted on /mnt."
+    echo "LOG: Root filesystem ($mounted_root_device) mounted on /mnt."
 
     log_sudo_cmd mkdir -p /mnt/boot
     echo "LOG: Mounting EFI system partition ($EFI_DEVICE_NODE) to /mnt/boot..."
     log_sudo_cmd mount "$EFI_DEVICE_NODE" /mnt/boot
     # Verify boot mount
-    if ! mountpoint -q /mnt/boot || [[ "$(findmnt -n -o SOURCE --target /mnt/boot)" != "$EFI_DEVICE_NODE" ]]; then
+    mounted_efi_device=$(findmnt -n -o SOURCE --target /mnt/boot || echo "none")
+    if ! mountpoint -q /mnt/boot || [[ "$mounted_efi_device" != "$EFI_DEVICE_NODE" ]]; then
         echo "ERROR: Failed to mount EFI partition ($EFI_DEVICE_NODE) to /mnt/boot."
-        echo "       Currently mounted on /mnt/boot: $(findmnt -n -o SOURCE --target /mnt/boot || echo "nothing")"
+        echo "       Attempted to mount: $EFI_DEVICE_NODE. Actually mounted on /mnt/boot: $mounted_efi_device"
+        echo "       Ensure $EFI_DEVICE_NODE was created and formatted correctly."
+        lsblk -fpo NAME,SIZE,FSTYPE,LABEL,PARTLABEL,PTTYPE,PARTTYPE "$TARGET_DISK" # Show state for debug
         exit 1
     fi
-    echo "LOG: EFI partition mounted on /mnt/boot."
+    echo "LOG: EFI partition ($mounted_efi_device) mounted on /mnt/boot."
 
-    echo "LOG: Activating SWAP by label $SWAP_PART_NAME..."
-    log_sudo_cmd swapon -L "$SWAP_PART_NAME"
+    echo "LOG: Activating SWAP by label $SWAP_PART_NAME (on $SWAP_DEVICE_NODE)..."
+    log_sudo_cmd swapon "$SWAP_DEVICE_NODE" # Prefer activating by device node after creation
     echo "LOG: Filesystems mounted and swap activated."
 
     echo "LOG: Final check of disk layout and mounts AFTER all operations in Step 2:"
@@ -383,12 +379,12 @@ EOF
     echo "Attempting to clean up mounts and swap as a precaution..."
     if mountpoint -q /mnt/boot; then sudo umount -lf /mnt/boot &>/dev/null || true; fi
     if mountpoint -q /mnt; then sudo umount -lf /mnt &>/dev/null || true; fi
-    if [[ -n "$SWAP_DEVICE_NODE" && -e "$SWAP_DEVICE_NODE" ]]; then
+    if [[ -n "$SWAP_DEVICE_NODE" && -e "$SWAP_DEVICE_NODE" ]]; then # Check if node was defined and exists
         sudo swapoff "$SWAP_DEVICE_NODE" &>/dev/null || true
-    elif [[ -n "$SWAP_PART_NAME" ]]; then
+    elif [[ -n "$SWAP_PART_NAME" ]]; then # Fallback to label if node info is missing
         sudo swapoff -L "$SWAP_PART_NAME" &>/dev/null || true
     else
-        sudo swapoff -a &>/dev/null || true
+        sudo swapoff -a &>/dev/null || true # General fallback
     fi
     echo "Examine logs above for details. You may need to manually clean up ${TARGET_DISK}."
     exit 1
