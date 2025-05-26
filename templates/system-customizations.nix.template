@@ -58,4 +58,7 @@
     # replace "auto" with that specific number after checking your core count (e.g., with `nproc`).
     max-jobs = "auto"; # Or your calculated value, e.g., 16
   };
+
+  # Enable VirtualBox host kernel modules
+  virtualisation.virtualbox.host.enable = true;
 }

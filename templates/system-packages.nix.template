@@ -50,7 +50,7 @@
     # File Sharing
     transmission-gtk # BitTorrent client with a GTK interface
  
- 
+    virtualbox
  
   ];
 }
