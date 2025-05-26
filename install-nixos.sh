@@ -432,13 +432,11 @@ generate_from_template() {
     fi
 }
 
-# install-nixos.sh の一部を修正 (前回提案の再掲)
 declare -a module_templates=(
     "flake.nix.template:flake.nix"
     "system-settings.nix.template:system-settings.nix"
     "users.nix.template:users.nix"
     "system-packages.nix.template:system-packages.nix"
-    "extra-apps.nix.template:extra-apps.nix"
     "gnome-desktop.nix.template:gnome-desktop.nix"
     "fonts-ime.nix.template:fonts-ime.nix"
     "sound.nix.template:sound.nix"
