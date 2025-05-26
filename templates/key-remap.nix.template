@@ -1,21 +1,17 @@
 # /templates/key-remap.nix
-#
-# Configures overall key remapping and keyboard behavior.
-# This includes:
-#   - Apple Keyboard Fn key behavior (via kernel module parameter).
-#   - Key remapping using keyd for Magic Keyboard and CapsLock.
-#
-# For xremap: ensure `inputs.xremap-flake.nixosModules.default` is included in
-# your flake.nix's `modules` list for the NixOS configuration.
 { config, pkgs, lib, inputs, nixosUsername, ... }:
 
 let
   username = nixosUsername;
 in
 {
+  # === Apple Keyboard Specific Kernel Module Options ===
+  boot.kernelModules = [ "hid_apple" ];
+  boot.extraModprobeConfig = ''
+    options hid_apple fnmode=2
+  '';
+
   # === Key Remapping using Keyd ===
-  # Keyd is a general-purpose keyboard remapping daemon that operates at a low level,
-  # independent of Xorg or Wayland, offering a more flexible configuration than udev hwdb.
   services.keyd.enable = true;
 
   services.keyd.keyboards = {
@@ -23,21 +19,21 @@ in
     default = {
       ids = [ "*" ]; # Apply to all connected keyboards.
       settings = {
-        # "main" is the section name.
         main = {
-          # "capslock" is the key, "leftcontrol" is the value.
           capslock = "leftcontrol";
         };
       };
     };
 
+    # Specific settings for "Magic Keyboard".
+    "Magic Keyboard" = {
+      ids = [ "004c:029c" ]; # Magic KeyboardのVID:PID
+      settings = {
+        main = {
+          capslock = "leftcontrol"; 
+          rightmeta = "S-f1";  
+        };
+      };
+    };
   };
-  # === Apple Keyboard Specific Kernel Module Options ===
-  # Sets F1-F12 keys to work as standard function keys by default.
-  # Media keys are accessed by pressing Fn + Fx.
-  boot.kernelModules = [ "hid_apple" ];
-  boot.extraModprobeConfig = ''
-    options hid_apple fnmode=2
-  ''; # Note: fnmode=2 might be default on some newer kernels/systems.
-
 }
