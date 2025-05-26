@@ -113,6 +113,9 @@ in
       # Background opacity (0.0 = fully transparent, 1.0 = fully opaque)
       background-opacity = 0.9;
 
+      split-divider-color = "green";
+      # no_window_decorations = true;
+
       # Keybindings
       keybind = [
         # Copy/Paste
