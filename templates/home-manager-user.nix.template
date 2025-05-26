@@ -114,7 +114,7 @@ in
       background-opacity = 0.9;
 
       split-divider-color = "green";
-      # no_window_decorations = true;
+      #gtk-titlebar = false;
 
       # Keybindings
       keybind = [
