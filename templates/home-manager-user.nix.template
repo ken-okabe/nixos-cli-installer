@@ -92,6 +92,10 @@ in
       else
         echo "Warning: zsh-history-substring-search plugin not found at $history_substring_search_path" >&2
       fi
+
+      export BUN_INSTALL="$HOME/.bun"
+      export PATH="$BUN_INSTALL/bin:$PATH"
+      
     ''; # End of initContent
   };
 
@@ -107,10 +111,7 @@ in
       # font-family = "JetBrainsMono Nerd Font";
 
       # Background opacity (0.0 = fully transparent, 1.0 = fully opaque)
-      background-opacity = 0.8;
-
-      # Enable automatic copy when text is selected
-      copy-on-select = true;
+      background-opacity = 0.9;
 
       # Keybindings
       keybind = [
@@ -127,7 +128,8 @@ in
         "ctrl+up=goto_split:up"
         "ctrl+right=goto_split:right"
 
-        "ctrl+enter=new_split:down"            # Create a new split below the current one
+        "ctrl+enter=new_split:down"            
+        # Create a new split below the current one
       ];
 
       # Other Ghostty settings can be added here.
