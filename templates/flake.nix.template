@@ -56,7 +56,6 @@
         # User and package management.
         ./users.nix                  # User accounts, passwords, sudo.
         ./system-packages.nix        # Base system-wide packages.
-        ./extra-apps.nix             # Additional user applications.
         ./fonts-ime.nix              # Fonts and input Method Editor (Fcitx5).
         # Desktop Environment.
         ./gnome-desktop.nix          # GNOME Desktop Environment configuration.
