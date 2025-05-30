@@ -6,7 +6,7 @@
 
   # Timezone Configuration
   # Sets the system's timezone. Replace with your desired timezone if different.
-  time.timeZone = "America/New_York";
+  time.timeZone = "Asia/Tokyo";
 
   # Internationalization (i18n) Settings
   # Sets the default locale for the system.
@@ -38,4 +38,44 @@
   # services.xserver.xkbVariant = ""; # Specify if you use a particular variant, e.g., "dvorak"
   # Example: Map Caps Lock to an additional Escape key.
   # services.xserver.xkbOptions = "caps:escape";
+
+  # Set the system's hostname.
+  # The placeholder "nixos" will be replaced by the install script
+  # with the hostname chosen by the user during setup.
+  networking.hostName = "nixos";
+
+  # Enable NetworkManager.
+  # NetworkManager is a widely used and user-friendly service for managing
+  # network connections (both wired and wireless). It integrates well with
+  # desktop environments like GNOME.
+  networking.networkmanager.enable = true;
+
+  hardware.bluetooth.enable = true;
+
+
+  # Explicitly disable PulseAudio, as PipeWire will provide a
+  # PulseAudio-compatible server. This avoids potential conflicts.
+  hardware.pulseaudio.enable = false;
+
+  # Enable RealtimeKit.
+  # This allows applications (like PipeWire) to request real-time scheduling
+  # priorities, which can significantly improve audio performance and reduce latency.
+  security.rtkit.enable = true;
+
+  # Enable PipeWire and its related services.
+  services.pipewire = {
+    enable = true;            # Enable the main PipeWire service.
+    alsa.enable = true;       # Provide ALSA compatibility (for applications that use ALSA directly).
+    alsa.support32Bit = true; # Enable ALSA support for 32-bit applications.
+    pulse.enable = true;      # Provide a PulseAudio compatible server, so PulseAudio apps work seamlessly.
+    # jack.enable = true;     # Uncomment if you need JACK Audio Connection Kit compatibility (e.g., for pro-audio apps).
+    # wireplumber.enable = true; # Session manager for PipeWire, usually enabled by default with pipewire.enable.
+  };
+
+  # Enable VirtualBox host kernel modules
+  virtualisation.virtualbox.host.enable = true;
+  users.extraGroups.vboxusers.members = [ "user-with-access-to-virtualbox" ];
+
+  networking.firewall.enable = false;
+
 }

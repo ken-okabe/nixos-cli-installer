@@ -8,7 +8,7 @@
   environment.systemPackages = with pkgs; [
     # Core utilities
     git       # Version control system (also configured per-user via Home Manager)
-
+    openssl
     # GNOME specific tools
     gnome-extension-manager           # To manage GNOME Shell Extensions
     gnome-tweaks                      # For advanced GNOME settings customization
@@ -16,7 +16,7 @@
 
     # Development
     nodejs_20    # Node.js LTS (includes npm) - choose version as needed
-    dotnetCorePackages.sdk_9_0-bin
+    dotnetCorePackages.sdk_8_0-bin
     
     # Utilities
     webp-pixbuf-loader # For WebP image support in GTK/GNOME applications

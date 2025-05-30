@@ -47,9 +47,6 @@
 
         # System-wide settings and customizations.
         ./system-settings.nix        # Locale, time, keyboard layout.
-        ./networking.nix             # Hostname, NetworkManager.
-        ./sound.nix                  # PipeWire audio setup.
-        ./bluetooth.nix              # Bluetooth support.
         ./virtualbox-guest.nix       # Settings for VirtualBox guest integration.
         ./system-customizations.nix  # Kernel, Nix GC, allowUnfree packages, Flakes enabling.
 
