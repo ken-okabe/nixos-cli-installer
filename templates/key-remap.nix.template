@@ -32,6 +32,8 @@ in
         main = {
           capslock = "leftcontrol"; 
           rightmeta = "S-f1";  
+          fn = "S-f2";            
+
         };
       };
     };
