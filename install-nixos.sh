@@ -52,6 +52,13 @@ log_sudo_cmd() {
 # === Dependency Checking ===
 check_dependencies() {
     log "Checking required dependencies..."
+    
+    # Check if template directory exists
+    if [[ ! -d "$TEMPLATE_DIR" ]]; then
+        log_error "Template directory not found: $TEMPLATE_DIR"
+        exit 1
+    fi
+    
     local deps=("mkpasswd" "sfdisk" "nixos-generate-config" "nixos-install" "lsblk" "findmnt" "mktemp")
     local missing_deps=()
     
@@ -404,8 +411,7 @@ copy_nix_modules() {
 }
 
 generate_module_imports() {
-    log "Generating dynamic module import list..."
-    
+    # No log statements here to avoid contaminating output
     local imports=()
     while IFS= read -r -d '' module_file; do
         local filename
@@ -540,8 +546,12 @@ generate_nixos_config() {
     copy_nix_modules
     
     # Generate module imports
+    log "Generating dynamic module import list..."
     local module_imports
     module_imports=$(generate_module_imports)
+    
+    # Debug: show what modules were found
+    log "Found modules for import: $(echo "$module_imports" | tr '\n' ' ')"
     
     # Generate flake.nix
     generate_flake_with_modules "flake.nix.template" "flake.nix" "$module_imports"
