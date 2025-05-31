@@ -64,15 +64,23 @@ log_sudo_cmd() {
     sudo "$@"
 }
 
-# Helper function to escape strings for use in sed replacement
-_escape_sed_replacement_string() {
+# Helper function to escape strings for use in sed single line replacement
+_escape_sed_replacement_string_singleline() {
     printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/|/\\|/g' -e "s/'/'\\\\''/g" -e 's/"/\\"/g' -e 's/%/\\%/g' -e 's/\//\\\//g'
 }
 
 # Helper function to escape strings for use in sed pattern (like the placeholder)
 _escape_sed_pattern_string() {
-    printf '%s' "$1" | sed -e 's/[\/&*$]/\\&/g' -e 's/%/\\%/g' # Basic escaping for common sed pattern chars + %
+    printf '%s' "$1" | sed -e 's/[\/&*$]/\\&/g' -e 's/%/\\%/g' 
 }
+
+# Helper function to escape strings for use in sed MULTI-LINE replacement
+_escape_sed_replacement_string_multiline() {
+    # For multi-line replacement, we need to escape &, \, and the delimiter used in sed (e.g., %)
+    # Newlines should be preserved as actual newlines.
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/%/\\%/g'
+}
+
 
 # This function generates the flake.nix, substitutes user variables,
 # and injects the dynamically generated list of module imports.
@@ -92,20 +100,20 @@ generate_flake_with_modules() {
 
     # Sed script for the first pass (variable substitution)
     # Using | as delimiter for sed here as __PLACEHOLDERS__ are unlikely to contain it.
-    local sed_script_pass1="
-      s|__NIXOS_USERNAME__|$(_escape_sed_replacement_string "$NIXOS_USERNAME")|g;
-      s|__PASSWORD_HASH__|$(_escape_sed_replacement_string "$PASSWORD_HASH")|g;
-      s|__GIT_USERNAME__|$(_escape_sed_replacement_string "$GIT_USERNAME")|g;
-      s|__GIT_USEREMAIL__|$(_escape_sed_replacement_string "$GIT_USEREMAIL")|g;
-      s|__HOSTNAME__|$(_escape_sed_replacement_string "$HOSTNAME")|g;
-      s|__TARGET_DISK_FOR_GRUB__|$(_escape_sed_replacement_string "$TARGET_DISK")|g;
+    local sed_script_pass1_cmds="
+      s|__NIXOS_USERNAME__|$(_escape_sed_replacement_string_singleline "$NIXOS_USERNAME")|g;
+      s|__PASSWORD_HASH__|$(_escape_sed_replacement_string_singleline "$PASSWORD_HASH")|g;
+      s|__GIT_USERNAME__|$(_escape_sed_replacement_string_singleline "$GIT_USERNAME")|g;
+      s|__GIT_USEREMAIL__|$(_escape_sed_replacement_string_singleline "$GIT_USEREMAIL")|g;
+      s|__HOSTNAME__|$(_escape_sed_replacement_string_singleline "$HOSTNAME")|g;
+      s|__TARGET_DISK_FOR_GRUB__|$(_escape_sed_replacement_string_singleline "$TARGET_DISK")|g;
     "
 
     local temp_output_pass1
     temp_output_pass1=$(mktemp)
 
     # Apply the first pass of substitutions
-    if ! sudo sed "$sed_script_pass1" "${template_path}" > "${temp_output_pass1}"; then
+    if ! sudo sed "$sed_script_pass1_cmds" "${template_path}" > "${temp_output_pass1}"; then
         echo "ERROR: sed command (pass 1 - variable substitution) failed for ${output_file_basename}."
         rm -f "$temp_output_pass1"
         return 1
@@ -120,29 +128,36 @@ generate_flake_with_modules() {
 
     # For the replacement string (module imports), escape characters that have special meaning in sed's replacement part
     local escaped_module_imports_for_sed_replacement
-    escaped_module_imports_for_sed_replacement=$(_escape_sed_replacement_string "${nixos_module_imports_string}")
+    escaped_module_imports_for_sed_replacement=$(_escape_sed_replacement_string_multiline "${nixos_module_imports_string}")
 
 
     local temp_output_pass2
     temp_output_pass2=$(mktemp)
+    local sed_script_file_pass2
+    sed_script_file_pass2=$(mktemp)
 
-    # Apply the second pass: replace the module placeholder with the generated list
-    # Use '%' as the sed delimiter to avoid conflicts with '/' in paths.
-    if command sudo sed "s%${escaped_placeholder_pattern}%${escaped_module_imports_for_sed_replacement}%g" "${temp_output_pass1}" > "${temp_output_pass2}"; then
+    # Create a sed script file for the multi-line replacement.
+    # This is the most robust way to handle newlines in the replacement.
+    # The replacement string should already have literal newlines.
+    # Ensure the replacement string is the last thing in the `s` command part before the final delimiter and flags.
+    printf 's%%%s%%%s%%g\n' "$escaped_placeholder_pattern" "$escaped_module_imports_for_sed_replacement" > "$sed_script_file_pass2"
+
+
+    if command sudo sed -f "$sed_script_file_pass2" "${temp_output_pass1}" > "${temp_output_pass2}"; then
         if sudo mv "$temp_output_pass2" "$output_path_final"; then
             echo "LOG: ${output_file_basename} generated successfully with dynamic modules at ${output_path_final}."
             sudo chmod 644 "$output_path_final"
-            rm -f "$temp_output_pass1" # Clean up pass 1 temp
+            rm -f "$temp_output_pass1" "$sed_script_file_pass2"
         else
             echo "ERROR: Failed to move final ${output_file_basename} to ${output_path_final}."
-            rm -f "$temp_output_pass1" "$temp_output_pass2"
+            rm -f "$temp_output_pass1" "$temp_output_pass2" "$sed_script_file_pass2"
             return 1
         fi
     else
         echo "ERROR: sed command (pass 2 - module import injection) failed for ${output_file_basename}."
-        echo "DEBUG: Placeholder pattern: ${escaped_placeholder_pattern}"
-        echo "DEBUG: Replacement string (escaped for sed): ${escaped_module_imports_for_sed_replacement}"
-        rm -f "$temp_output_pass1" "$temp_output_pass2"
+        echo "DEBUG: Sed script content of $sed_script_file_pass2:"
+        cat "$sed_script_file_pass2"
+        rm -f "$temp_output_pass1" "$temp_output_pass2" "$sed_script_file_pass2"
         return 1
     fi
 }
@@ -472,6 +487,7 @@ for nix_source_file in "${TEMPLATE_DIR}"/*.nix; do
     if [ -f "$nix_source_file" ]; then
         nix_filename=$(basename "$nix_source_file")
         # Skip copying flake.nix.template and hardware-configuration.nix itself in this step
+        # hardware-configuration.nix is generated by nixos-generate-config directly into the target
         if [[ "$nix_filename" == "flake.nix.template" || "$nix_filename" == "hardware-configuration.nix" ]]; then
             continue
         fi
@@ -490,7 +506,7 @@ echo "LOG: Finished copying .nix module files."
 
 # --- Part 2: Generate the list of NixOS module imports ---
 echo "LOG: Generating dynamic NixOS module import list..."
-declare -a nixos_module_imports_array=() # Renamed to avoid conflict if nixos_module_imports is used elsewhere
+declare -a nixos_module_imports_array=() 
 # Use find to list files and handle spaces/special characters in filenames safely
 # Read null-delimited output of find
 while IFS= read -r -d $'\0' module_file_path; do
@@ -505,14 +521,13 @@ while IFS= read -r -d $'\0' module_file_path; do
 done < <(find "$TEMPLATE_DIR" -maxdepth 1 -type f -name "*.nix" -print0) # find .nix files in template dir, print null-delimited, ensure they are files
 
 # Join the array elements into a single string with newlines
-generated_nixos_module_imports_string="" # Renamed to avoid conflict
-for import_line in "${nixos_module_imports_array[@]}"; do
-    generated_nixos_module_imports_string+="${import_line}\n"
-done
-# Remove the last newline if the list is not empty
-if [ -n "$generated_nixos_module_imports_string" ]; then
-    # Use printf to remove trailing newline robustly
-    generated_nixos_module_imports_string=$(printf '%s' "$generated_nixos_module_imports_string")
+generated_nixos_module_imports_string="" 
+if [ ${#nixos_module_imports_array[@]} -gt 0 ]; then
+    printf -v generated_nixos_module_imports_string '%s\n' "${nixos_module_imports_array[@]}"
+    # Remove the very last newline added by printf if the array was not empty
+    generated_nixos_module_imports_string=${generated_nixos_module_imports_string%?}
+else
+    generated_nixos_module_imports_string="" # Ensure it's empty if no modules
 fi
 
 
@@ -545,16 +560,4 @@ if sudo nixos-install --no-root-passwd --flake "${TARGET_NIXOS_CONFIG_DIR}#${HOS
     echo ""
     echo "--------------------------------------------------------------------"
     echo "NixOS installation completed successfully!"
-    echo "You can now reboot your system."
-    echo "To reboot, run: sudo reboot"
-    echo "--------------------------------------------------------------------"
-else
-    echo "ERROR: nixos-install failed. Please check the output above for errors."
-    echo "The system filesystems are still mounted at /mnt."
-    echo "You can investigate files in ${TARGET_NIXOS_CONFIG_DIR} or try installation steps again."
-    exit 1
-fi
-
-echo "===================================================================="
-echo "Script finished."
-exit 0
+    echo "You can now
