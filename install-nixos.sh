@@ -1,18 +1,79 @@
 #!/usr/bin/env bash
 
-# === Initial Setup and Error Handling ===
-set -e # Exit immediately if a command exits with a non-zero status.
-# set -x # Uncomment for extreme debugging (prints every command executed)
+# === Enhanced NixOS Flake-based Installation Script ===
+set -euo pipefail # Exit on error, undefined vars, pipe failures
 
-# Get the directory where the script is located to reference template files.
+# === Global Variables ===
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 TEMPLATE_DIR="${SCRIPT_DIR}/templates"
-TARGET_NIXOS_CONFIG_DIR="/mnt/etc/nixos"                # NixOS config on the target mount
+TARGET_NIXOS_CONFIG_DIR="/mnt/etc/nixos"
+LOG_FILE="/tmp/nixos-install-$(date +%s).log"
 
-# === Function Definitions ===
+# Partition configuration
+SWAP_SIZE_GB="16"
+DEFAULT_EFI_SIZE_MiB="512"
+EFI_PART_NAME="EFI"
+SWAP_PART_NAME="SWAP"
+ROOT_PART_NAME="ROOT_NIXOS"
+DEFAULT_ROOT_FS_TYPE="ext4"
+
+# Device nodes (set during partitioning)
+EFI_DEVICE_NODE=""
+ROOT_DEVICE_NODE=""
+SWAP_DEVICE_NODE=""
+
+# User configuration variables
+NIXOS_USERNAME=""
+PASSWORD_HASH=""
+GIT_USERNAME=""
+GIT_USEREMAIL=""
+HOSTNAME=""
+TARGET_DISK=""
+
+# === Logging Functions ===
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+}
+
+log_error() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $*" | tee -a "$LOG_FILE" >&2
+}
+
+log_cmd() {
+    log "CMD: $*"
+    "$@"
+}
+
+log_sudo_cmd() {
+    log "SUDO CMD: $*"
+    sudo "$@"
+}
+
+# === Dependency Checking ===
+check_dependencies() {
+    log "Checking required dependencies..."
+    local deps=("mkpasswd" "sfdisk" "nixos-generate-config" "nixos-install" "lsblk" "findmnt" "mktemp")
+    local missing_deps=()
+    
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            missing_deps+=("$dep")
+        fi
+    done
+    
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        log_error "Missing required dependencies: ${missing_deps[*]}"
+        echo "Please install the missing dependencies and try again."
+        exit 1
+    fi
+    
+    log "All dependencies satisfied."
+}
+
+# === Confirmation Function ===
 confirm() {
     local question="$1"
-    local default_response_char="$2" # Expected to be "Y" or "N"
+    local default_response_char="$2"
     local prompt_display=""
 
     if [[ "$default_response_char" == "Y" ]]; then
@@ -20,8 +81,7 @@ confirm() {
     elif [[ "$default_response_char" == "N" ]]; then
         prompt_display="[y/N]"
     else
-        # Developer error, not user error.
-        echo "DEVELOPER ERROR: confirm function called with invalid default_response_char: '$default_response_char'. Assuming 'N' as a safe default." >&2
+        log_error "confirm function called with invalid default: '$default_response_char'"
         prompt_display="[y/N]"
         default_response_char="N"
     fi
@@ -33,531 +93,534 @@ confirm() {
 
         case "$response_lower" in
             y|yes)
-                return 0 # Success (Yes)
+                return 0
                 ;;
             n|no)
-                # If 'No', prompt again. User must Ctrl+C to abort if they don't want to proceed at all.
-                echo "You selected 'No'. The question will be asked again. Press Ctrl+C to abort the script if you do not wish to proceed."
+                echo "You selected 'No'. The question will be asked again. Press Ctrl+C to abort."
                 ;;
-            "") # Empty input, choose default
+            "")
                 if [[ "$default_response_char" == "Y" ]]; then
-                    return 0 # Success (Default was Yes)
+                    return 0
                 else
-                    # If default is 'No', prompt again.
-                    echo "Default is 'No' (Enter pressed). The question will be asked again. Press Ctrl+C to abort."
+                    echo "Default is 'No'. The question will be asked again. Press Ctrl+C to abort."
                 fi
                 ;;
             *)
-                echo "Invalid input. Please type 'y' (for yes) or 'n' (for no), or press Enter to accept the default."
+                echo "Invalid input. Please type 'y', 'n', or press Enter for default."
                 ;;
         esac
     done
 }
 
-log_cmd() {
-    echo "LOG: CMD: $*"
-    "$@"
+# === String Escaping Functions ===
+escape_for_sed() {
+    printf '%s' "$1" | sed 's/[[\.*^$()+?{|]/\\&/g'
 }
 
-log_sudo_cmd() {
-    echo "LOG: SUDO CMD: $*"
-    sudo "$@"
+# === Progress Indicator ===
+show_progress() {
+    local pid=$1
+    local msg="$2"
+    
+    while kill -0 $pid 2>/dev/null; do
+        for i in / - \\ \|; do
+            printf '\r%s %s' "$msg" "$i"
+            sleep 0.25
+        done
+    done
+    printf '\r%s... Done!\n' "$msg"
 }
 
-# Helper function to escape strings for use in sed single line replacement
-_escape_sed_replacement_string_singleline() {
-    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/|/\\|/g' -e "s/'/'\\\\''/g" -e 's/"/\\"/g' -e 's/%/\\%/g' -e 's/\//\\\//g'
-}
-
-# Helper function to escape strings for use in sed pattern (like the placeholder)
-_escape_sed_pattern_string() {
-    printf '%s' "$1" | sed -e 's/[\/&*$]/\\&/g' -e 's/%/\\%/g' 
-}
-
-# Helper function to escape strings for use in sed MULTI-LINE replacement
-_escape_sed_replacement_string_multiline() {
-    # For multi-line replacement, we need to escape &, \, and the delimiter used in sed (e.g., %)
-    # Newlines should be preserved as actual newlines.
-    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/%/\\%/g'
-}
-
-
-# This function generates the flake.nix, substitutes user variables,
-# and injects the dynamically generated list of module imports.
-generate_flake_with_modules() {
-    local template_file_basename="$1" # e.g., flake.nix.template
-    local output_file_basename="$2"   # e.g., flake.nix
-    local template_path="${TEMPLATE_DIR}/${template_file_basename}"
-    local output_path_final="${TARGET_NIXOS_CONFIG_DIR}/${output_file_basename}"
-    local nixos_module_imports_string="$3" # Pass the pre-generated module imports string as the third argument
-
-    if [[ ! -f "$template_path" ]]; then
-        echo "ERROR: Template file not found: $template_path"
-        return 1
+# === Cleanup Function ===
+cleanup_on_error() {
+    log "Performing cleanup due to error..."
+    
+    # Unmount in reverse order
+    if mountpoint -q /mnt/boot 2>/dev/null; then
+        sudo umount /mnt/boot || log_error "Failed to unmount /mnt/boot"
     fi
-
-    echo "LOG: Generating initial $output_file_basename from $template_file_basename (pass 1)..."
-
-    # Sed script for the first pass (variable substitution)
-    # Using | as delimiter for sed here as __PLACEHOLDERS__ are unlikely to contain it.
-    local sed_script_pass1_cmds="
-      s|__NIXOS_USERNAME__|$(_escape_sed_replacement_string_singleline "$NIXOS_USERNAME")|g;
-      s|__PASSWORD_HASH__|$(_escape_sed_replacement_string_singleline "$PASSWORD_HASH")|g;
-      s|__GIT_USERNAME__|$(_escape_sed_replacement_string_singleline "$GIT_USERNAME")|g;
-      s|__GIT_USEREMAIL__|$(_escape_sed_replacement_string_singleline "$GIT_USEREMAIL")|g;
-      s|__HOSTNAME__|$(_escape_sed_replacement_string_singleline "$HOSTNAME")|g;
-      s|__TARGET_DISK_FOR_GRUB__|$(_escape_sed_replacement_string_singleline "$TARGET_DISK")|g;
-    "
-
-    local temp_output_pass1
-    temp_output_pass1=$(mktemp)
-
-    # Apply the first pass of substitutions
-    if ! sudo sed "$sed_script_pass1_cmds" "${template_path}" > "${temp_output_pass1}"; then
-        echo "ERROR: sed command (pass 1 - variable substitution) failed for ${output_file_basename}."
-        rm -f "$temp_output_pass1"
-        return 1
+    
+    if mountpoint -q /mnt 2>/dev/null; then
+        sudo umount /mnt || log_error "Failed to unmount /mnt"
     fi
-    echo "LOG: Pass 1 (variable substitution) for ${output_file_basename} successful."
+    
+    # Turn off swap
+    if [[ -n "$SWAP_DEVICE_NODE" && -e "$SWAP_DEVICE_NODE" ]]; then
+        sudo swapoff "$SWAP_DEVICE_NODE" 2>/dev/null || true
+    fi
+    
+    sudo swapoff -a 2>/dev/null || true
+    
+    log "Cleanup completed."
+}
 
-    # Pass 2: Insert the dynamic module list
-    echo "LOG: Inserting dynamic module list into ${output_file_basename} (pass 2)..."
-    local placeholder_to_replace="#__NIXOS_MODULE_IMPORTS_PLACEHOLDER__#"
-    # Ensure placeholder is escaped for sed pattern
-    local escaped_placeholder_pattern=$(_escape_sed_pattern_string "$placeholder_to_replace")
+# Set trap for cleanup
+trap cleanup_on_error ERR
 
-    # For the replacement string (module imports), escape characters that have special meaning in sed's replacement part
-    local escaped_module_imports_for_sed_replacement
-    escaped_module_imports_for_sed_replacement=$(_escape_sed_replacement_string_multiline "${nixos_module_imports_string}")
-
-
-    local temp_output_pass2
-    temp_output_pass2=$(mktemp)
-    local sed_script_file_pass2
-    sed_script_file_pass2=$(mktemp)
-
-    # Create a sed script file for the multi-line replacement.
-    # This is the most robust way to handle newlines in the replacement.
-    # The replacement string should already have literal newlines.
-    # Ensure the replacement string is the last thing in the `s` command part before the final delimiter and flags.
-    printf 's%%%s%%%s%%g\n' "$escaped_placeholder_pattern" "$escaped_module_imports_for_sed_replacement" > "$sed_script_file_pass2"
-
-
-    if command sudo sed -f "$sed_script_file_pass2" "${temp_output_pass1}" > "${temp_output_pass2}"; then
-        if sudo mv "$temp_output_pass2" "$output_path_final"; then
-            echo "LOG: ${output_file_basename} generated successfully with dynamic modules at ${output_path_final}."
-            sudo chmod 644 "$output_path_final"
-            rm -f "$temp_output_pass1" "$sed_script_file_pass2"
-        else
-            echo "ERROR: Failed to move final ${output_file_basename} to ${output_path_final}."
-            rm -f "$temp_output_pass1" "$temp_output_pass2" "$sed_script_file_pass2"
-            return 1
+# === Disk Management Functions ===
+show_available_disks() {
+    echo "Available block devices:"
+    lsblk -dpno NAME,SIZE,MODEL,TYPE | grep -E "disk" | while IFS= read -r line; do
+        disk=$(echo "$line" | awk '{print $1}')
+        if [[ -b "$disk" ]]; then
+            echo "  $line"
         fi
-    else
-        echo "ERROR: sed command (pass 2 - module import injection) failed for ${output_file_basename}."
-        echo "DEBUG: Sed script content of $sed_script_file_pass2:"
-        cat "$sed_script_file_pass2"
-        rm -f "$temp_output_pass1" "$temp_output_pass2" "$sed_script_file_pass2"
-        return 1
-    fi
+    done
 }
 
-
-# --- 0. Preamble and Critical Warning ---
-echo "===================================================================="
-echo "NixOS Flake-based Installation Helper Script (Debug Enhanced)"
-echo "===================================================================="
-echo "WARNING: This script is designed to partition a disk, format it,"
-echo "         and install NixOS. This will ERASE ALL DATA on the"
-echo "         selected disk."
-echo ""
-echo "         Execute this script entirely AT YOUR OWN RISK."
-echo "         No liability is assumed for any data loss or system damage."
-echo ""
-echo "         It is STRONGLY recommended to:"
-echo "           1. Back up any important data."
-echo "           2. Detach any unnecessary disks or media before proceeding."
-echo "           3. Carefully verify the target disk when prompted."
-echo "           4. Ensure the selected TARGET DISK is prepared as an UNDEFINED DRIVE"
-echo "              (e.g., no existing partitions or valuable data). This script will"
-echo "              attempt to wipe it completely. For re-attempts, ensure the disk is"
-echo "              in a clean state or understand that existing partitions will be destroyed."
-echo "           5. This script will use '/mnt' and '/mnt/boot' as temporary mount points."
-echo "              If these are currently in use by other devices, you will be asked for"
-echo "              confirmation to unmount them."
-echo "--------------------------------------------------------------------"
-confirm "Do you understand these warnings and accept full responsibility for proceeding?" "N"
-echo "--------------------------------------------------------------------"
-
-# --- 1. Gather Information Interactively ---
-echo "Step 1: Gathering information..."
-echo ""
-echo "Available block devices (physical disks, not partitions):"
-lsblk -pno NAME,SIZE,MODEL # Show physical disks
-echo ""
-while true; do
-    read -r -p "Enter the target disk for NixOS installation (e.g., /dev/sda, /dev/nvme0n1): " TARGET_DISK
-    if [[ -b "$TARGET_DISK" ]]; then # Check if it's a block device
-        TARGET_DISK_PROMPT="You have selected '$TARGET_DISK'. ALL DATA ON THIS DISK WILL BE ERASED! Are you absolutely sure?"
-        confirm "$TARGET_DISK_PROMPT" "N" # Default to No for safety
-        break
-    else
-        echo "Error: '$TARGET_DISK' is not a valid block device. Please try again."
-    fi
-done
-echo "LOG: TARGET_DISK set to: $TARGET_DISK"
-
-SWAP_SIZE_GB="16"
-DEFAULT_EFI_SIZE_MiB="512"
-EFI_PART_NAME="EFI"
-SWAP_PART_NAME="SWAP"
-ROOT_PART_NAME="ROOT_NIXOS"
-DEFAULT_ROOT_FS_TYPE="ext4"
-echo "LOG: SWAP_SIZE_GB=${SWAP_SIZE_GB}, DEFAULT_EFI_SIZE_MiB=${DEFAULT_EFI_SIZE_MiB}"
-echo "LOG: EFI_PART_NAME=${EFI_PART_NAME}, SWAP_PART_NAME=${SWAP_PART_NAME}, ROOT_PART_NAME=${ROOT_PART_NAME}, DEFAULT_ROOT_FS_TYPE=${DEFAULT_ROOT_FS_TYPE}"
-
-EFI_DEVICE_NODE=""
-ROOT_DEVICE_NODE=""
-SWAP_DEVICE_NODE=""
-
-echo ""
-read -r -p "Enter the desired username for the primary system user (e.g., ken): " NIXOS_USERNAME
-while [[ -z "$NIXOS_USERNAME" ]]; do
-    read -r -p "Username is required. Please enter a username: " NIXOS_USERNAME
-done
-echo "LOG: NIXOS_USERNAME set to: $NIXOS_USERNAME"
-
-echo ""
-echo "Next, set the password for the system user ('${NIXOS_USERNAME}') and the root account."
-echo "You will be prompted to enter the password twice (input will not be displayed)."
-pass1=""
-pass2=""
-while true; do
-    read -r -s -p "Enter password: " pass1
-    echo ""
-    read -r -s -p "Retype password: " pass2
-    echo ""
-    if [[ "$pass1" == "$pass2" ]]; then
-        if [[ -z "$pass1" ]]; then
-            echo "Error: Password cannot be empty. Please try again."
-        else
-            break
-        fi
-    else
-        echo "Error: Passwords do not match. Please try again."
-    fi
-done
-PASSWORD_HASH=$(echo -n "$pass1" | mkpasswd -m sha-512 -s)
-if [[ -z "$PASSWORD_HASH" || ! "$PASSWORD_HASH" == \$6\$* ]]; then
-    echo "Error: Failed to generate password hash with mkpasswd. Ensure mkpasswd is available and working."
-    exit 1
-fi
-unset pass1 pass2
-echo "LOG: Password hash generated."
-
-echo ""
-read -r -p "Enter your Git username (for commits, can be different from system user): " GIT_USERNAME
-while [[ -z "$GIT_USERNAME" ]]; do
-    read -r -p "Git username is required. Please enter one: " GIT_USERNAME
-done
-echo "LOG: GIT_USERNAME set to: $GIT_USERNAME"
-read -r -p "Enter your Git email address (for commits): " GIT_USEREMAIL
-while [[ -z "$GIT_USEREMAIL" ]]; do
-    read -r -p "Git email address is required. Please enter one: " GIT_USEREMAIL
-done
-echo "LOG: GIT_USEREMAIL set to: $GIT_USEREMAIL"
-
-echo ""
-DEFAULT_HOSTNAME="nixos"
-read -r -p "Enter the system hostname (default: ${DEFAULT_HOSTNAME}): " HOSTNAME
-HOSTNAME=${HOSTNAME:-$DEFAULT_HOSTNAME}
-echo "LOG: HOSTNAME set to: $HOSTNAME"
-
-echo "--------------------------------------------------------------------"
-echo "Configuration Summary:"
-echo "  Target Disk:        $TARGET_DISK"
-echo "  EFI Size:           ${DEFAULT_EFI_SIZE_MiB}MiB"
-echo "  Swap Size:          ${SWAP_SIZE_GB}GiB"
-echo "  Root Filesystem:    $DEFAULT_ROOT_FS_TYPE (on remaining space)"
-echo "  System Username:    $NIXOS_USERNAME"
-echo "  Git Username:       $GIT_USERNAME"
-echo "  Git Email:          $GIT_USEREMAIL"
-echo "  Hostname:           $HOSTNAME"
-echo "  Password Hash:      (Generated, not displayed for security)"
-echo ""
-confirm "Review the summary above. Do you want to proceed with these settings?" "Y"
-echo "--------------------------------------------------------------------"
-
-# --- 2. Disk Partitioning, Formatting, and Mounting (using sfdisk) ---
-echo "Step 2: Starting disk partitioning, formatting, and mounting on $TARGET_DISK..."
-confirm "FINAL WARNING: ALL DATA ON '$TARGET_DISK' WILL BE ERASED. Proceed with partitioning?" "N"
-
-{
-    echo "LOG: Checking and preparing /mnt and /mnt/boot mount points..."
-    MOUNT_POINTS_TO_CLEAN=("/mnt/boot" "/mnt")
-    for mp_to_clean in "${MOUNT_POINTS_TO_CLEAN[@]}"; do
-        if mountpoint -q "$mp_to_clean"; then
-            current_mounted_device=$(findmnt -n -o SOURCE --target "$mp_to_clean")
-            echo "INFO: '$mp_to_clean' is currently mounted by '$current_mounted_device'."
-            is_target_disk_partition=false
-            if [[ "$current_mounted_device" == "$TARGET_DISK"* ]]; then
-                is_target_disk_partition=true
-            fi
-
-            if $is_target_disk_partition; then
-                 echo "INFO: '$current_mounted_device' appears to be a partition of the target disk '$TARGET_DISK'."
-                 echo "       This might be from a previous incomplete run. Attempting to unmount..."
-                 log_sudo_cmd umount -f "$mp_to_clean" || echo "WARN: Failed to unmount '$mp_to_clean' (part of target disk). It might be busy or already unmounted."
+prepare_mount_points() {
+    log "Checking and preparing mount points..."
+    local mount_points=("/mnt/boot" "/mnt")
+    
+    for mp in "${mount_points[@]}"; do
+        if mountpoint -q "$mp" 2>/dev/null; then
+            local current_device
+            current_device=$(findmnt -n -o SOURCE --target "$mp")
+            log "Mount point '$mp' is currently mounted by '$current_device'"
+            
+            if [[ "$current_device" == "$TARGET_DISK"* ]]; then
+                log "Unmounting target disk partition from '$mp'..."
+                sudo umount -f "$mp" || log_error "Failed to unmount '$mp'"
             else
-                if confirm "Mount point '$mp_to_clean' is in use by '$current_mounted_device' (not the target disk). Unmount it to proceed with installation?" "N"; then
-                    log_sudo_cmd umount -f "$mp_to_clean" || { echo "ERROR: Failed to unmount '$mp_to_clean'. Please unmount it manually and restart the script." >&2; exit 1; }
-                    echo "LOG: '$mp_to_clean' unmounted."
+                if confirm "Mount point '$mp' is in use by '$current_device'. Unmount it?" "N"; then
+                    sudo umount -f "$mp" || {
+                        log_error "Failed to unmount '$mp'. Please unmount manually."
+                        exit 1
+                    }
                 else
-                    echo "ERROR: User chose not to unmount '$mp_to_clean'. Installation cannot proceed safely." >&2
-                    echo "       Please ensure '$mp_to_clean' is free before running the script." >&2
+                    log_error "Cannot proceed with '$mp' in use."
                     exit 1
                 fi
             fi
-        else
-            echo "LOG: '$mp_to_clean' is not currently a mountpoint or is not mounted. Good."
         fi
     done
+}
 
-    echo "LOG: Attempting to turn off swap if active..."
-    if [[ -n "$SWAP_PART_NAME" ]]; then
-        echo "LOG: Attempting to swapoff by label $SWAP_PART_NAME (if it exists from a previous run)..."
-        sudo swapoff -L "$SWAP_PART_NAME" &>/dev/null || true
-    fi
-    echo "LOG: Attempting to swapoff all active swap partitions (swapoff -a) as a general measure..."
-    sudo swapoff -a &>/dev/null || true
-    echo "LOG: Finished attempting to turn off swap."
-    sleep 2
-
-    TOTAL_DISK_BYTES=$(sudo blockdev --getsize64 "$TARGET_DISK")
-    if ! [[ "$TOTAL_DISK_BYTES" =~ ^[0-9]+$ ]] || [ "$TOTAL_DISK_BYTES" -eq 0 ]; then
-        echo "Error: Could not determine total disk size in bytes for $TARGET_DISK from blockdev."
+calculate_partitions() {
+    local total_bytes
+    total_bytes=$(sudo blockdev --getsize64 "$TARGET_DISK")
+    
+    if ! [[ "$total_bytes" =~ ^[0-9]+$ ]] || [ "$total_bytes" -eq 0 ]; then
+        log_error "Could not determine disk size for $TARGET_DISK"
         exit 1
     fi
-    TOTAL_DISK_MiB=$((TOTAL_DISK_BYTES / 1024 / 1024))
-    echo "LOG: Total disk size (for sfdisk calculations): ${TOTAL_DISK_MiB}MiB"
-
-    EFI_START_OFFSET_MiB="1"
-    EFI_SIZE_MiB_ACTUAL="${DEFAULT_EFI_SIZE_MiB}"
-    SWAP_SIZE_REQUESTED_MiB_INT=$((SWAP_SIZE_GB * 1024))
-    ROOT_START_OFFSET_MiB_ACTUAL="$((EFI_START_OFFSET_MiB + EFI_SIZE_MiB_ACTUAL))"
-    ROOT_END_OFFSET_MiB_ACTUAL="$((TOTAL_DISK_MiB - SWAP_SIZE_REQUESTED_MiB_INT))"
-    ROOT_SIZE_MiB_ACTUAL="$((ROOT_END_OFFSET_MiB_ACTUAL - ROOT_START_OFFSET_MiB_ACTUAL))"
-    SWAP_START_OFFSET_MiB_ACTUAL="$ROOT_END_OFFSET_MiB_ACTUAL"
-
-    if [ "$ROOT_SIZE_MiB_ACTUAL" -le 0 ]; then
-        echo "Error: Calculated space for ROOT partition is invalid or too small (${ROOT_SIZE_MiB_ACTUAL}MiB)."
+    
+    local total_mib=$((total_bytes / 1024 / 1024))
+    local efi_start=1
+    local efi_size=$DEFAULT_EFI_SIZE_MiB
+    local swap_size_mib=$((SWAP_SIZE_GB * 1024))
+    local root_start=$((efi_start + efi_size))
+    local root_end=$((total_mib - swap_size_mib))
+    local root_size=$((root_end - root_start))
+    local swap_start=$root_end
+    
+    if [ "$root_size" -le 1024 ]; then
+        log_error "Insufficient space for root partition (${root_size}MiB)"
         exit 1
     fi
-    CALCULATED_TOTAL_ALLOCATED_MiB=$((EFI_START_OFFSET_MiB + EFI_SIZE_MiB_ACTUAL + ROOT_SIZE_MiB_ACTUAL + SWAP_SIZE_REQUESTED_MiB_INT))
-    if [ "$CALCULATED_TOTAL_ALLOCATED_MiB" -gt "$TOTAL_DISK_MiB" ]; then
-        # Allow a small discrepancy (e.g., up to 4MiB) due to MiB vs M calculations by sfdisk or other tools
-        if [ "$((CALCULATED_TOTAL_ALLOCATED_MiB - TOTAL_DISK_MiB))" -gt 4 ]; then
-            echo "Error: Calculated total partition allocation (${CALCULATED_TOTAL_ALLOCATED_MiB}MiB) significantly exceeds disk size (${TOTAL_DISK_MiB}MiB)."
-            exit 1
-        else
-            echo "WARN: Calculated total partition allocation (${CALCULATED_TOTAL_ALLOCATED_MiB}MiB) slightly exceeds disk size (${TOTAL_DISK_MiB}MiB). This might be due to rounding or conversion differences. Proceeding with caution."
-        fi
-    fi
+    
+    log "Partition layout: EFI=${efi_size}MiB, Root=${root_size}MiB, Swap=${swap_size_mib}MiB"
+    
+    # Export calculated values
+    EFI_START=$efi_start
+    EFI_SIZE=$efi_size
+    ROOT_START=$root_start
+    ROOT_SIZE=$root_size
+    SWAP_START=$swap_start
+    SWAP_SIZE_MIB=$swap_size_mib
+}
 
-    echo "LOG: Calculated partition MiB values: EFI_start=${EFI_START_OFFSET_MiB}, EFI_size=${EFI_SIZE_MiB_ACTUAL}, Root_start=${ROOT_START_OFFSET_MiB_ACTUAL}, Root_size=${ROOT_SIZE_MiB_ACTUAL}, Swap_start=${SWAP_START_OFFSET_MiB_ACTUAL}, Swap_size=${SWAP_SIZE_REQUESTED_MiB_INT}"
-
-    EFI_TYPE_GUID="C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
-    ROOT_TYPE_GUID="0FC63DAF-8483-4772-8E79-3D69D8477DE4"
-    SWAP_TYPE_GUID="0657FD6D-A4AB-43C4-84E5-0933C84B4F4F"
-
-    PART_SUFFIX_1="1"; PART_SUFFIX_2="2"; PART_SUFFIX_3="3"
+create_partitions() {
+    log "Creating partition scheme on $TARGET_DISK..."
+    
+    # Determine partition suffix
+    local part_suffix="1"
     if [[ "$TARGET_DISK" == /dev/nvme* || "$TARGET_DISK" == /dev/loop* ]]; then
-        PART_SUFFIX_1="p1"; PART_SUFFIX_2="p2"; PART_SUFFIX_3="p3"
+        part_suffix="p1"
+        EFI_DEVICE_NODE="${TARGET_DISK}p1"
+        ROOT_DEVICE_NODE="${TARGET_DISK}p2"
+        SWAP_DEVICE_NODE="${TARGET_DISK}p3"
+    else
+        EFI_DEVICE_NODE="${TARGET_DISK}1"
+        ROOT_DEVICE_NODE="${TARGET_DISK}2"
+        SWAP_DEVICE_NODE="${TARGET_DISK}3"
     fi
-    EFI_DEVICE_NODE="${TARGET_DISK}${PART_SUFFIX_1}"
-    ROOT_DEVICE_NODE="${TARGET_DISK}${PART_SUFFIX_2}"
-    SWAP_DEVICE_NODE="${TARGET_DISK}${PART_SUFFIX_3}"
-    echo "LOG: EFI Device Node will be: ${EFI_DEVICE_NODE}"
-    echo "LOG: Root Device Node will be: ${ROOT_DEVICE_NODE}"
-    echo "LOG: Swap Device Node will be: ${SWAP_DEVICE_NODE}"
-
-SFDISK_INPUT=$(cat <<EOF
-label: gpt
-name="${EFI_PART_NAME}", start=${EFI_START_OFFSET_MiB}M, size=${EFI_SIZE_MiB_ACTUAL}M, type=${EFI_TYPE_GUID}
-name="${ROOT_PART_NAME}", start=${ROOT_START_OFFSET_MiB_ACTUAL}M, size=${ROOT_SIZE_MiB_ACTUAL}M, type=${ROOT_TYPE_GUID}
-name="${SWAP_PART_NAME}", start=${SWAP_START_OFFSET_MiB_ACTUAL}M, size=${SWAP_SIZE_REQUESTED_MiB_INT}M, type=${SWAP_TYPE_GUID}
-EOF
-)
-    echo "LOG: sfdisk input prepared:"
-    echo -e "------ Start of SFDISK_INPUT ------\n${SFDISK_INPUT}\n------- End of SFDISK_INPUT -------"
-
-    echo "LOG: Applying partition scheme using sfdisk on $TARGET_DISK..."
-    printf "%s" "${SFDISK_INPUT}" | log_sudo_cmd sfdisk \
-        --wipe always \
-        --wipe-partitions always \
-        "$TARGET_DISK"
-
-    echo "LOG: Partition scheme applied with sfdisk."
-    echo "LOG: Informing kernel of partition table changes..."
+    
+    # GPT type GUIDs
+    local efi_type="C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
+    local root_type="0FC63DAF-8483-4772-8E79-3D69D8477DE4"
+    local swap_type="0657FD6D-A4AB-43C4-84E5-0933C84B4F4F"
+    
+    # Create sfdisk input
+    local sfdisk_input="label: gpt
+name=\"${EFI_PART_NAME}\", start=${EFI_START}M, size=${EFI_SIZE}M, type=${efi_type}
+name=\"${ROOT_PART_NAME}\", start=${ROOT_START}M, size=${ROOT_SIZE}M, type=${root_type}
+name=\"${SWAP_PART_NAME}\", start=${SWAP_START}M, size=${SWAP_SIZE_MIB}M, type=${swap_type}"
+    
+    log "Applying partition scheme..."
+    printf "%s" "$sfdisk_input" | sudo sfdisk --wipe always --wipe-partitions always "$TARGET_DISK"
+    
+    # Inform kernel of changes
     sync
-    if ! sudo partprobe "$TARGET_DISK"; then
-        echo "WARN: partprobe failed on attempt 1. Trying blockdev..."
-        sleep 3
-        if ! sudo blockdev --rereadpt "$TARGET_DISK"; then
-            echo "WARN: blockdev --rereadpt also failed. Kernel might use old partition table."
-        fi
-    fi
+    sudo partprobe "$TARGET_DISK" || sudo blockdev --rereadpt "$TARGET_DISK" || true
     sleep 2
-    echo "LOG: Finished attempting to inform kernel of partition changes."
-
+    
+    log "Partition scheme applied successfully."
     sudo sfdisk -l "$TARGET_DISK"
-    lsblk -fpo NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT,PARTLABEL,PTTYPE,PARTTYPE "$TARGET_DISK"
+}
 
+format_partitions() {
+    log "Formatting partitions..."
+    
+    # Wait for device nodes to be available
+    local max_wait=10
+    local wait_count=0
+    while [[ ! -e "$EFI_DEVICE_NODE" || ! -e "$ROOT_DEVICE_NODE" || ! -e "$SWAP_DEVICE_NODE" ]] && [ $wait_count -lt $max_wait ]; do
+        sleep 1
+        ((wait_count++))
+    done
+    
+    if [[ ! -e "$EFI_DEVICE_NODE" || ! -e "$ROOT_DEVICE_NODE" || ! -e "$SWAP_DEVICE_NODE" ]]; then
+        log_error "Partition device nodes not available after waiting"
+        exit 1
+    fi
+    
+    # Format partitions
     log_sudo_cmd mkfs.vfat -F 32 -n "$EFI_PART_NAME" "$EFI_DEVICE_NODE"
     log_sudo_cmd mkfs."$DEFAULT_ROOT_FS_TYPE" -F -L "$ROOT_PART_NAME" "$ROOT_DEVICE_NODE"
     log_sudo_cmd mkswap -f -L "$SWAP_PART_NAME" "$SWAP_DEVICE_NODE"
-    echo "LOG: Partitions have been formatted."
+    
+    log "Partitions formatted successfully."
+}
 
+mount_filesystems() {
+    log "Mounting filesystems..."
+    
+    # Mount root
     log_sudo_cmd mount "$ROOT_DEVICE_NODE" /mnt
-    mounted_root_device=$(findmnt -n -o SOURCE --target /mnt || echo "none")
-    if ! mountpoint -q /mnt || [[ "$mounted_root_device" != "$ROOT_DEVICE_NODE" ]]; then
-        echo "ERROR: Failed to mount root partition ($ROOT_DEVICE_NODE) to /mnt."
+    if ! mountpoint -q /mnt; then
+        log_error "Failed to mount root filesystem"
         exit 1
     fi
-    echo "LOG: Root filesystem ($mounted_root_device) mounted on /mnt."
-
+    
+    # Create and mount boot
     log_sudo_cmd mkdir -p /mnt/boot
     log_sudo_cmd mount "$EFI_DEVICE_NODE" /mnt/boot
-    mounted_efi_device=$(findmnt -n -o SOURCE --target /mnt/boot || echo "none")
-    if ! mountpoint -q /mnt/boot || [[ "$mounted_efi_device" != "$EFI_DEVICE_NODE" ]]; then
-        echo "ERROR: Failed to mount EFI partition ($EFI_DEVICE_NODE) to /mnt/boot."
+    if ! mountpoint -q /mnt/boot; then
+        log_error "Failed to mount EFI filesystem"
         exit 1
     fi
-    echo "LOG: EFI partition ($mounted_efi_device) mounted on /mnt/boot."
-
+    
+    # Enable swap
     log_sudo_cmd swapon "$SWAP_DEVICE_NODE"
-    echo "LOG: Filesystems mounted and swap activated."
-    lsblk -fpo NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT,PARTLABEL,PTTYPE,PARTTYPE "$TARGET_DISK"
-    df -h /mnt /mnt/boot
-
-} || {
-    echo "ERROR: A critical error occurred during disk operations in Step 2."
-    if mountpoint -q /mnt/boot; then sudo umount -lf /mnt/boot &>/dev/null || true; fi
-    if mountpoint -q /mnt; then sudo umount -lf /mnt &>/dev/null || true; fi
-    if [[ -n "$SWAP_DEVICE_NODE" && -e "$SWAP_DEVICE_NODE" ]]; then
-        sudo swapoff "$SWAP_DEVICE_NODE" &>/dev/null || true
-    elif [[ -n "$SWAP_PART_NAME" ]]; then
-        sudo swapoff -L "$SWAP_PART_NAME" &>/dev/null || true
-    else
-        sudo swapoff -a &>/dev/null || true
-    fi
-    echo "Examine logs above for details. You may need to manually clean up ${TARGET_DISK}."
-    exit 1
+    
+    log "Filesystems mounted successfully."
+    lsblk -fpo NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT "$TARGET_DISK"
 }
-echo "Disk operations (partitioning, formatting, mounting) completed successfully."
-echo "--------------------------------------------------------------------"
-echo ""
-echo "INFO: Current partition layout on ${TARGET_DISK} and final mount points for NixOS installation:"
-sudo lsblk -fpo NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT,PARTLABEL,PTTYPE,PARTTYPE "$TARGET_DISK"
-echo ""
-echo "INFO: Filesystem usage for /mnt and /mnt/boot:"
-sudo df -h /mnt /mnt/boot
-echo ""
-confirm "Disk partitioning, formatting, and mounting complete. Please review the layout above. Continue to generate NixOS module files?" "Y"
-echo "--------------------------------------------------------------------"
 
-# --- 3. Generate hardware-configuration.nix ---
-echo "Step 3: Generating NixOS hardware configuration (hardware-configuration.nix)..."
-log_sudo_cmd nixos-generate-config --root /mnt
-echo "LOG: hardware-configuration.nix generated at ${TARGET_NIXOS_CONFIG_DIR}/hardware-configuration.nix."
-if [ -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix" ]; then
-    echo "LOG: Removing the generated base ${TARGET_NIXOS_CONFIG_DIR}/configuration.nix as it is not used by this Flake setup."
-    log_sudo_cmd rm -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix"
-fi
-echo "--------------------------------------------------------------------"
+# === Configuration Generation Functions ===
+generate_flake_with_modules() {
+    local template_file="$1"
+    local output_file="$2"
+    local module_imports="$3"
+    local template_path="${TEMPLATE_DIR}/${template_file}"
+    local output_path="${TARGET_NIXOS_CONFIG_DIR}/${output_file}"
+    
+    if [[ ! -f "$template_path" ]]; then
+        log_error "Template file not found: $template_path"
+        return 1
+    fi
+    
+    log "Generating $output_file from template..."
+    
+    # Create temporary files for processing
+    local temp_file1 temp_file2
+    temp_file1=$(mktemp)
+    temp_file2=$(mktemp)
+    
+    # First pass: substitute variables
+    sed \
+        -e "s|__NIXOS_USERNAME__|$(escape_for_sed "$NIXOS_USERNAME")|g" \
+        -e "s|__PASSWORD_HASH__|$(escape_for_sed "$PASSWORD_HASH")|g" \
+        -e "s|__GIT_USERNAME__|$(escape_for_sed "$GIT_USERNAME")|g" \
+        -e "s|__GIT_USEREMAIL__|$(escape_for_sed "$GIT_USEREMAIL")|g" \
+        -e "s|__HOSTNAME__|$(escape_for_sed "$HOSTNAME")|g" \
+        -e "s|__TARGET_DISK_FOR_GRUB__|$(escape_for_sed "$TARGET_DISK")|g" \
+        "$template_path" > "$temp_file1"
+    
+    # Second pass: inject module imports
+    local placeholder="#__NIXOS_MODULE_IMPORTS_PLACEHOLDER__#"
+    if grep -q "$placeholder" "$temp_file1"; then
+        awk -v imports="$module_imports" -v placeholder="$placeholder" '
+            {
+                if ($0 ~ placeholder) {
+                    print imports
+                } else {
+                    print $0
+                }
+            }
+        ' "$temp_file1" > "$temp_file2"
+    else
+        cp "$temp_file1" "$temp_file2"
+    fi
+    
+    # Install final file
+    if sudo mv "$temp_file2" "$output_path"; then
+        sudo chmod 644 "$output_path"
+        log "$output_file generated successfully."
+    else
+        log_error "Failed to install $output_file"
+        rm -f "$temp_file1" "$temp_file2"
+        return 1
+    fi
+    
+    rm -f "$temp_file1"
+}
 
-# --- 4. Generate Flake and Custom Module Files ---
-echo "Step 4: Generating Flake and copying custom NixOS module files..."
-log_sudo_cmd mkdir -p "${TARGET_NIXOS_CONFIG_DIR}"
-echo "LOG: Ensured ${TARGET_NIXOS_CONFIG_DIR} exists."
+copy_nix_modules() {
+    log "Copying NixOS module files..."
+    
+    for nix_file in "${TEMPLATE_DIR}"/*.nix; do
+        if [[ -f "$nix_file" ]]; then
+            local filename
+            filename=$(basename "$nix_file")
+            
+            # Skip template files and hardware config
+            if [[ "$filename" == "flake.nix.template" || "$filename" == "hardware-configuration.nix" ]]; then
+                continue
+            fi
+            
+            local dest_path="${TARGET_NIXOS_CONFIG_DIR}/${filename}"
+            log "Copying $filename..."
+            
+            if sudo cp "$nix_file" "$dest_path"; then
+                sudo chmod 644 "$dest_path"
+            else
+                log_error "Failed to copy $filename"
+                exit 1
+            fi
+        fi
+    done
+}
 
-# --- Part 1: Copy all .nix files (except flake.nix.template, hardware-configuration.nix) from templates to target ---
-echo "LOG: Copying .nix module files from ${TEMPLATE_DIR} to ${TARGET_NIXOS_CONFIG_DIR}..."
-for nix_source_file in "${TEMPLATE_DIR}"/*.nix; do
-    if [ -f "$nix_source_file" ]; then
-        nix_filename=$(basename "$nix_source_file")
-        # Skip copying flake.nix.template and hardware-configuration.nix itself in this step
-        # hardware-configuration.nix is generated by nixos-generate-config directly into the target
-        if [[ "$nix_filename" == "flake.nix.template" || "$nix_filename" == "hardware-configuration.nix" ]]; then
+generate_module_imports() {
+    log "Generating dynamic module import list..."
+    
+    local imports=()
+    while IFS= read -r -d '' module_file; do
+        local filename
+        filename=$(basename "$module_file")
+        
+        # Skip excluded files
+        if [[ "$filename" == "flake.nix.template" ]] || \
+           [[ "$filename" == "home-manager-user.nix" ]] || \
+           [[ "$filename" == "hardware-configuration.nix" ]]; then
             continue
         fi
-        dest_path="${TARGET_NIXOS_CONFIG_DIR}/${nix_filename}"
-        echo "LOG: Copying $nix_filename to $dest_path..."
-        if sudo cp "$nix_source_file" "$dest_path"; then
-            sudo chmod 644 "$dest_path"
-            echo "LOG: ${nix_filename} copied successfully."
+        
+        imports+=("        ./${filename}")
+    done < <(find "$TEMPLATE_DIR" -maxdepth 1 -name "*.nix" -type f -print0)
+    
+    # Join imports with newlines
+    local import_string=""
+    if [[ ${#imports[@]} -gt 0 ]]; then
+        printf -v import_string '%s\n' "${imports[@]}"
+        import_string=${import_string%?} # Remove trailing newline
+    fi
+    
+    echo "$import_string"
+}
+
+# === User Input Functions ===
+get_user_input() {
+    log "Gathering user configuration..."
+    
+    # Show available disks
+    show_available_disks
+    echo ""
+    
+    # Get target disk
+    while true; do
+        read -r -p "Enter target disk (e.g., /dev/sda): " TARGET_DISK
+        if [[ -b "$TARGET_DISK" ]]; then
+            if confirm "Selected '$TARGET_DISK'. ALL DATA WILL BE ERASED! Continue?" "N"; then
+                break
+            fi
         else
-            echo "ERROR: Failed to copy ${nix_filename} to ${dest_path}."
+            echo "Error: '$TARGET_DISK' is not a valid block device."
+        fi
+    done
+    
+    # Get username
+    while [[ -z "$NIXOS_USERNAME" ]]; do
+        read -r -p "Enter username: " NIXOS_USERNAME
+    done
+    
+    # Get password
+    while true; do
+        read -r -s -p "Enter password: " pass1
+        echo ""
+        read -r -s -p "Confirm password: " pass2
+        echo ""
+        
+        if [[ "$pass1" == "$pass2" && -n "$pass1" ]]; then
+            PASSWORD_HASH=$(echo -n "$pass1" | mkpasswd -m sha-512 -s)
+            if [[ -n "$PASSWORD_HASH" && "$PASSWORD_HASH" == \$6\$* ]]; then
+                break
+            else
+                log_error "Failed to generate password hash"
+                exit 1
+            fi
+        else
+            echo "Passwords don't match or are empty. Try again."
+        fi
+    done
+    unset pass1 pass2
+    
+    # Get Git configuration
+    while [[ -z "$GIT_USERNAME" ]]; do
+        read -r -p "Enter Git username: " GIT_USERNAME
+    done
+    
+    while [[ -z "$GIT_USEREMAIL" ]]; do
+        read -r -p "Enter Git email: " GIT_USEREMAIL
+    done
+    
+    # Get hostname
+    read -r -p "Enter hostname (default: nixos): " HOSTNAME
+    HOSTNAME=${HOSTNAME:-nixos}
+    
+    # Show summary
+    echo ""
+    echo "Configuration Summary:"
+    echo "  Target Disk:     $TARGET_DISK"
+    echo "  Username:        $NIXOS_USERNAME"
+    echo "  Git Username:    $GIT_USERNAME"
+    echo "  Git Email:       $GIT_USEREMAIL"
+    echo "  Hostname:        $HOSTNAME"
+    echo "  EFI Size:        ${DEFAULT_EFI_SIZE_MiB}MiB"
+    echo "  Swap Size:       ${SWAP_SIZE_GB}GiB"
+    echo ""
+    
+    confirm "Proceed with these settings?" "Y"
+}
+
+# === Main Installation Functions ===
+partition_and_format_disk() {
+    log "Starting disk operations..."
+    
+    prepare_mount_points
+    calculate_partitions
+    
+    # Turn off existing swap
+    sudo swapoff -a 2>/dev/null || true
+    
+    create_partitions
+    format_partitions
+    mount_filesystems
+    
+    log "Disk operations completed successfully."
+}
+
+generate_nixos_config() {
+    log "Generating NixOS configuration..."
+    
+    # Generate hardware configuration
+    log_sudo_cmd nixos-generate-config --root /mnt
+    
+    # Remove default configuration.nix
+    if [[ -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix" ]]; then
+        sudo rm -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix"
+    fi
+    
+    # Ensure target directory exists
+    log_sudo_cmd mkdir -p "$TARGET_NIXOS_CONFIG_DIR"
+    
+    # Copy module files
+    copy_nix_modules
+    
+    # Generate module imports
+    local module_imports
+    module_imports=$(generate_module_imports)
+    
+    # Generate flake.nix
+    generate_flake_with_modules "flake.nix.template" "flake.nix" "$module_imports"
+    
+    log "NixOS configuration generated successfully."
+}
+
+install_nixos() {
+    log "Starting NixOS installation..."
+    echo "This may take a long time. Please be patient."
+    
+    if confirm "Proceed with NixOS installation?" "Y"; then
+        log "Running nixos-install..."
+        
+        # Run installation in background to show progress
+        sudo nixos-install --no-root-passwd --flake "${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}" &
+        local install_pid=$!
+        
+        show_progress $install_pid "Installing NixOS"
+        
+        if wait $install_pid; then
+            log "NixOS installation completed successfully!"
+            echo ""
+            echo "======================================================================"
+            echo "Installation Complete!"
+            echo "======================================================================"
+            echo ""
+            echo "Your NixOS system has been installed successfully."
+            echo "You can now:"
+            echo "  1. Reboot into your new system: sudo reboot"
+            echo "  2. Remove the installation media"
+            echo "  3. Log in with username: $NIXOS_USERNAME"
+            echo ""
+            echo "Configuration files are located at: $TARGET_NIXOS_CONFIG_DIR"
+            echo "Installation log: $LOG_FILE"
+            echo ""
+            confirm "Reboot now?" "Y" && sudo reboot
+        else
+            log_error "NixOS installation failed!"
+            echo "Check the installation log: $LOG_FILE"
             exit 1
         fi
     fi
-done
-echo "LOG: Finished copying .nix module files."
+}
 
-# --- Part 2: Generate the list of NixOS module imports ---
-echo "LOG: Generating dynamic NixOS module import list..."
-declare -a nixos_module_imports_array=() 
-# Use find to list files and handle spaces/special characters in filenames safely
-# Read null-delimited output of find
-while IFS= read -r -d $'\0' module_file_path; do
-    # Get just the filename
-    module_filename=$(basename "$module_file_path")
-    # Exclude specific files that are not directly imported in the main list
-    if [[ "$module_filename" == "flake.nix.template" || "$module_filename" == "home-manager-user.nix" || "$module_filename" == "hardware-configuration.nix" ]]; then
-        continue
-    fi
-    # Add with correct Nix formatting (indentation and path prefix)
-    nixos_module_imports_array+=("        ./${module_filename}") # 8 spaces for indentation
-done < <(find "$TEMPLATE_DIR" -maxdepth 1 -type f -name "*.nix" -print0) # find .nix files in template dir, print null-delimited, ensure they are files
-
-# Join the array elements into a single string with newlines
-generated_nixos_module_imports_string="" 
-if [ ${#nixos_module_imports_array[@]} -gt 0 ]; then
-    printf -v generated_nixos_module_imports_string '%s\n' "${nixos_module_imports_array[@]}"
-    # Remove the very last newline added by printf if the array was not empty
-    generated_nixos_module_imports_string=${generated_nixos_module_imports_string%?}
-else
-    generated_nixos_module_imports_string="" # Ensure it's empty if no modules
-fi
-
-
-echo "LOG: Generated module import block:"
-echo -e "------ Start of Module Imports ------\n${generated_nixos_module_imports_string}\n------- End of Module Imports -------"
-
-
-# --- Part 3: Generate flake.nix from template and insert dynamic module list ---
-FLAKE_TEMPLATE_BASENAME="flake.nix.template"
-FLAKE_OUTPUT_BASENAME="flake.nix"
-
-# Call the function to generate flake.nix, passing the generated module string
-if ! generate_flake_with_modules "$FLAKE_TEMPLATE_BASENAME" "$FLAKE_OUTPUT_BASENAME" "${generated_nixos_module_imports_string}"; then
-    echo "ERROR: Failed to generate comprehensive ${FLAKE_OUTPUT_BASENAME}. Aborting installation."
-    exit 1
-fi
-
-echo "All NixOS configuration files processed and placed in ${TARGET_NIXOS_CONFIG_DIR}/."
-echo "--------------------------------------------------------------------"
-
-# --- 5. Install NixOS ---
-echo "Step 5: Installing NixOS using the Flake configuration..."
-echo "This process will take a significant amount of time. Please be patient."
-echo "You will see a lot of build output."
-echo ""
-confirm "Proceed with NixOS installation?" "Y"
-
-echo "LOG: Starting nixos-install --no-root-passwd --flake ${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}"
-if sudo nixos-install --no-root-passwd --flake "${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}"; then
+# === Main Script ===
+main() {
+    echo "======================================================================"
+    echo "Enhanced NixOS Flake-based Installation Script"
+    echo "======================================================================"
     echo ""
-    echo "--------------------------------------------------------------------"
-    echo "NixOS installation completed successfully!"
-    echo "You can now
+    echo "WARNING: This script will ERASE ALL DATA on the selected disk!"
+    echo "         Please ensure you have backed up important data."
+    echo ""
+    echo "Installation log: $LOG_FILE"
+    echo ""
+    
+    if ! confirm "Do you understand and accept full responsibility?" "N"; then
+        echo "Installation aborted by user."
+        exit 0
+    fi
+    
+    log "Starting NixOS installation process..."
+    
+    # Check dependencies
+    check_dependencies
+    
+    # Gather user input
+    get_user_input
+    
+    # Partition and format disk
+    partition_and_format_disk
+    
+    # Generate configuration
+    generate_nixos_config
+    
+    # Install NixOS
+    install_nixos
+}
+
+# Run main function
+main "$@"
