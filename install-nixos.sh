@@ -40,13 +40,10 @@ log_error() {
 }
 
 log_cmd() {
-    log "CMD: $*" # コマンド実行のログ自体は現在のlog関数でOK
+    log "CMD: $*" 
     local status
-    # コマンドを実行し、その標準出力と標準エラー出力をパイプで sudo tee -a に渡す
-    # サブシェル内で pipefail を設定し、コマンド自体の失敗をstatusで捉える
-    # teeの出力を /dev/null に捨てて、コンソールへの二重出力を防ぐ
     if ! (set -o pipefail; "$@" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null); then
-        status=$? # パイプラインの終了ステータスを取得
+        status=$? 
         log_error "Command failed with exit code $status: $*"
         return 1
     fi
@@ -54,17 +51,15 @@ log_cmd() {
 }
 
 log_sudo_cmd() {
-    log "SUDO CMD: $*" # コマンド実行のログ自体は現在のlog関数でOK
+    log "SUDO CMD: $*" 
     local status
-    # sudoでコマンドを実行し、同様に処理
     if ! (set -o pipefail; sudo "$@" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null); then
-        status=$? # パイプラインの終了ステータスを取得
+        status=$? 
         log_error "Sudo command failed with exit code $status: $*"
         return 1
     fi
     return 0
 }
-
 
 # === Dependency Checking ===
 check_dependencies() {
@@ -121,8 +116,6 @@ confirm() {
                 ;;
             n|no)
                 echo "You selected 'No'. For critical choices, this may abort or re-prompt. Press Ctrl+C to abort script if stuck." >&2
-                # Depending on context, 'no' might require an explicit 'exit 0' or 'return 1' from calling function
-                # This confirm function itself will loop on 'no' for now.
                 ;;
             "") 
                 if [[ "$default_response_char" == "Y" ]]; then
@@ -275,7 +268,6 @@ calculate_partitions() {
     
     local swap_size_actual_mib=$swap_size_req_mib
     
-    # MODIFIED BLOCK: Changed from `if [ cond ]; { group; }` to `if [ cond ]; then group; fi`
     if [ $((total_mib - root_start_mib)) -lt "$swap_size_req_mib" ]; then
         log "Warning: Requested swap size ($swap_size_req_mib MiB) is larger than available after EFI. Reducing swap size."
         swap_size_actual_mib=$((total_mib - root_start_mib - 1)) 
@@ -283,7 +275,7 @@ calculate_partitions() {
             log_error "Calculated swap size ($swap_size_actual_mib MiB) is too small. Check disk space or SWAP_SIZE_GB. Exiting."
             exit 1
         fi
-    fi # End of MODIFIED BLOCK
+    fi
     
     local swap_start_mib=$((total_mib - swap_size_actual_mib))
     local root_size_mib=$((swap_start_mib - root_start_mib))
@@ -306,6 +298,7 @@ calculate_partitions() {
     SWAP_SIZE_MIB_CALC=$swap_size_actual_mib
 }
 
+
 create_partitions() {
     log "Creating partition scheme on $TARGET_DISK..."
     
@@ -322,7 +315,6 @@ create_partitions() {
     local swap_type_guid="0657FD6D-A4AB-43C4-84E5-0933C84B4F4F" 
     
     local sfdisk_input
-    # MODIFIED: Removed "unit: MiB" and added "M" suffix to start/size values
     sfdisk_input=$(cat <<EOF
 label: gpt
 ${EFI_DEVICE_NODE} : start=${EFI_START_MIB_CALC}M, size=${EFI_SIZE_MIB_CALC}M, type=${efi_type_guid}, name="${EFI_PART_NAME}"
@@ -334,23 +326,29 @@ EOF
     log "Applying partition scheme with sfdisk. Details:"
     echo -e "$sfdisk_input" | sudo tee -a "$LOG_FILE" 
     
-    printf "%s" "$sfdisk_input" | sudo sfdisk \
+    # sfdisk can be tricky with input. Ensure printf is safe.
+    if ! (printf "%s" "$sfdisk_input" | sudo sfdisk \
         --wipe always \
         --wipe-partitions always \
-        "$TARGET_DISK"
+        "$TARGET_DISK" >> "$LOG_FILE" 2>&1) ; then # Capture sfdisk output directly to log for this critical step
+        log_error "sfdisk command failed. Check log for sfdisk output. Exiting."
+        exit 1
+    fi
 
     log "Partitioning supposedly complete. Informing kernel of changes..."
     sync 
-    sudo partprobe "$TARGET_DISK" || log "partprobe $TARGET_DISK failed, attempting blockdev --rereadpt..."
-    sudo blockdev --rereadpt "$TARGET_DISK" || log "blockdev --rereadpt $TARGET_DISK also failed. Udev might still pick it up."
+    # partprobe can sometimes fail even if things are okay, so don't exit on its failure alone.
+    sudo partprobe "$TARGET_DISK" 2>> "$LOG_FILE" || log "partprobe $TARGET_DISK returned non-zero, attempting blockdev..."
+    sudo blockdev --rereadpt "$TARGET_DISK" 2>> "$LOG_FILE" || log "blockdev --rereadpt $TARGET_DISK also returned non-zero. Udev might still pick it up."
     
     log "Waiting for udev to settle partition changes..."
     sudo udevadm settle
     sleep 3 
     
     log "Partition scheme applied. Verifying partitions on $TARGET_DISK:"
-    sudo sfdisk -l "$TARGET_DISK" | sudo tee -a "$LOG_FILE" 
+    (set -o pipefail; sudo sfdisk -l "$TARGET_DISK" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null) || log_error "Failed to list partitions with sfdisk after creation, but continuing."
 }
+
 
 format_partitions() {
     log "Formatting partitions..."
@@ -367,13 +365,14 @@ format_partitions() {
         current_wait=$((current_wait + 1))
     done
     
-    if [[ ! -b "$EFI_DEVICE_NODE" ]]; then log_error "$EFI_DEVICE_NODE is not a block device!"; fi
-    if [[ ! -b "$ROOT_DEVICE_NODE" ]]; then log_error "$ROOT_DEVICE_NODE is not a block device!"; fi
-    if [[ ! -b "$SWAP_DEVICE_NODE" ]]; then log_error "$SWAP_DEVICE_NODE is not a block device!"; fi
+    # Check individual nodes and log if missing, then one final check before exit
+    if [[ ! -b "$EFI_DEVICE_NODE" ]]; then log_error "$EFI_DEVICE_NODE is not a block device after wait!"; fi
+    if [[ ! -b "$ROOT_DEVICE_NODE" ]]; then log_error "$ROOT_DEVICE_NODE is not a block device after wait!"; fi
+    if [[ ! -b "$SWAP_DEVICE_NODE" ]]; then log_error "$SWAP_DEVICE_NODE is not a block device after wait!"; fi
 
     if [[ ! -b "$EFI_DEVICE_NODE" || ! -b "$ROOT_DEVICE_NODE" || ! -b "$SWAP_DEVICE_NODE" ]]; then
         log_error "One or more partition device nodes did not become available after $max_wait_seconds seconds. Exiting."
-        lsblk "$TARGET_DISK" -o NAME,PATH,TYPE,SIZE | sudo tee -a "$LOG_FILE" 
+        (set -o pipefail; lsblk "$TARGET_DISK" -o NAME,PATH,TYPE,SIZE 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null)
         exit 1
     fi
     log "All partition device nodes are available."
@@ -383,9 +382,9 @@ format_partitions() {
     log_sudo_cmd mkswap -f -L "$SWAP_PART_NAME" "$SWAP_DEVICE_NODE" 
     
     log "Partitions formatted. Verifying UUIDs and Labels post-formatting:"
-    sudo blkid "$EFI_DEVICE_NODE" | sudo tee -a "$LOG_FILE"
-    sudo blkid "$ROOT_DEVICE_NODE" | sudo tee -a "$LOG_FILE"
-    sudo blkid "$SWAP_DEVICE_NODE" | sudo tee -a "$LOG_FILE"
+    (set -o pipefail; sudo blkid "$EFI_DEVICE_NODE" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null)
+    (set -o pipefail; sudo blkid "$ROOT_DEVICE_NODE" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null)
+    (set -o pipefail; sudo blkid "$SWAP_DEVICE_NODE" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null)
     
     log "Partition formatting completed successfully."
 }
@@ -395,28 +394,36 @@ mount_filesystems() {
     log "Mounting filesystems..."
     
     log "Mounting Root partition $ROOT_DEVICE_NODE on /mnt"
-    sudo mount "$ROOT_DEVICE_NODE" /mnt
+    # Using log_sudo_cmd for mount to ensure its output handling is consistent
+    if ! log_sudo_cmd mount "$ROOT_DEVICE_NODE" /mnt; then
+        log_error "Failed to mount root filesystem $ROOT_DEVICE_NODE on /mnt via log_sudo_cmd. Exiting."
+        exit 1
+    fi
     if ! mountpoint -q /mnt; then 
-        log_error "Failed to mount root filesystem $ROOT_DEVICE_NODE on /mnt. Exiting."
+        log_error "Verification failed: /mnt is not a mountpoint after mount command. Exiting."
         exit 1
     fi
     
-    log "Creating EFI mount point /mnt/boot"
-    sudo mkdir -p /mnt/boot
+    log_sudo_cmd mkdir -p /mnt/boot
+
     log "Mounting EFI partition $EFI_DEVICE_NODE on /mnt/boot"
-    sudo mount "$EFI_DEVICE_NODE" /mnt/boot
-    if ! mountpoint -q /mnt/boot; then 
-        log_error "Failed to mount EFI filesystem $EFI_DEVICE_NODE on /mnt/boot. Exiting."
-        sudo umount /mnt 2>/dev/null || true
+    if ! log_sudo_cmd mount "$EFI_DEVICE_NODE" /mnt/boot; then
+        log_error "Failed to mount EFI filesystem $EFI_DEVICE_NODE on /mnt/boot via log_sudo_cmd. Exiting."
+        sudo umount /mnt 2>/dev/null || true # Attempt to unmount root if boot mount fails
+        exit 1
+    fi
+     if ! mountpoint -q /mnt/boot; then 
+        log_error "Verification failed: /mnt/boot is not a mountpoint after mount command. Exiting."
+        sudo umount /mnt 2>/dev/null || true 
         exit 1
     fi
     
     log "Enabling swap on $SWAP_DEVICE_NODE"
-    sudo swapon "$SWAP_DEVICE_NODE"
+    log_sudo_cmd swapon "$SWAP_DEVICE_NODE"
     
     log "Filesystems mounted and swap enabled successfully."
     log "Current filesystem layout on $TARGET_DISK:"
-    lsblk -fpo NAME,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINT,PARTUUID "$TARGET_DISK" | sudo tee -a "$LOG_FILE"
+    (set -o pipefail; sudo lsblk -fpo NAME,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINT,PARTUUID "$TARGET_DISK" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null)
 }
 
 # === Configuration Generation Functions ===
@@ -429,7 +436,7 @@ generate_flake_with_modules() {
     
     if [[ ! -f "$template_path" ]]; then
         log_error "Template file for $output_file not found: $template_path. Exiting."
-        return 1 
+        return 1 # Changed from exit 1 to return 1 for functions
     fi
     
     log "Generating $output_file from template $template_path..."
@@ -437,6 +444,8 @@ generate_flake_with_modules() {
     local temp_processed_vars temp_final_output
     temp_processed_vars=$(mktemp)
     temp_final_output=$(mktemp)
+    # Consider adding trap for temp file cleanup within this function if it can error out before normal cleanup
+    # trap "rm -f '$temp_processed_vars' '$temp_final_output' 2>/dev/null" RETURN
 
     sed \
         -e "s/__NIXOS_USERNAME__/$(escape_for_sed "$NIXOS_USERNAME")/g" \
@@ -465,13 +474,14 @@ generate_flake_with_modules() {
     fi
     
     log "Installing generated file to $output_path"
-    if sudo mv "$temp_final_output" "$output_path"; then
-        sudo chmod 644 "$output_path"
+    # Using log_sudo_cmd for mv and chmod might be overkill if errors are already handled
+    if sudo mv "$temp_final_output" "$output_path" && sudo chmod 644 "$output_path"; then
         log "$output_file generated and installed successfully at $output_path."
-        rm -f "$temp_processed_vars" 
+        rm -f "$temp_processed_vars" 2>/dev/null # temp_final_output was moved
         return 0
     else
-        log_error "Failed to install $output_file to $output_path. Temp files: $temp_processed_vars, $temp_final_output. Exiting."
+        log_error "Failed to install $output_file to $output_path or chmod failed. Temp files: $temp_processed_vars, $temp_final_output (if not moved). Review permissions. Exiting."
+        rm -f "$temp_processed_vars" "$temp_final_output" 2>/dev/null # Clean up as best as possible
         return 1
     fi
 }
@@ -496,10 +506,9 @@ copy_nix_modules() {
         local dest_path="${TARGET_NIXOS_CONFIG_DIR}/${filename}"
         
         log "Copying $filename to $dest_path..."
-        if sudo cp "$nix_file_path" "$dest_path"; then
-            sudo chmod 644 "$dest_path"
-        else
-            log_error "Failed to copy $filename to $dest_path. Exiting."
+        # Using log_sudo_cmd for cp and chmod
+        if ! log_sudo_cmd cp "$nix_file_path" "$dest_path" || ! log_sudo_cmd chmod 644 "$dest_path"; then
+            log_error "Failed to copy or chmod $filename to $dest_path. Exiting."
             exit 1 
         fi
     done
@@ -636,7 +645,8 @@ partition_and_format_disk() {
     prepare_mount_points 
     calculate_partitions 
     log "Turning off any existing swap devices on the system..."
-    sudo swapoff -a 2>/dev/null || log "No active swap to turn off, or already off."
+    # Use log_sudo_cmd for swapoff for consistent error/output handling, ignore error if no swap
+    log_sudo_cmd swapoff -a || log "No active swap to turn off, or swapoff -a returned non-zero (can be ignored if no swap)."
     create_partitions 
     format_partitions 
     mount_filesystems 
@@ -647,8 +657,9 @@ partition_and_format_disk() {
 generate_nixos_config() {
     log "Generating NixOS configuration files in $TARGET_NIXOS_CONFIG_DIR..."
     log "Running 'nixos-generate-config --root /mnt' to create hardware-configuration.nix..."
-    if ! sudo nixos-generate-config --root /mnt >> "$LOG_FILE" 2>&1; then
-        log_error "'nixos-generate-config --root /mnt' failed. Check logs. Exiting."
+    # MODIFIED: Use log_sudo_cmd for nixos-generate-config
+    if ! log_sudo_cmd nixos-generate-config --root /mnt; then
+        log_error "'nixos-generate-config --root /mnt' failed (see details above). Exiting."
         exit 1
     fi
     log "'nixos-generate-config' completed."
@@ -656,11 +667,12 @@ generate_nixos_config() {
     local hw_conf_path="${TARGET_NIXOS_CONFIG_DIR}/hardware-configuration.nix"
     if sudo test -f "$hw_conf_path"; then
         log "Verifying generated $hw_conf_path content (key entries):"
-        {
+        # Pipe output of this command group to sudo tee -a to log it
+        (
             echo "--- Relevant entries from $hw_conf_path ---"
             sudo grep -E 'fileSystems\."/"|fileSystems\."/boot"|boot\.loader\.(grub|systemd-boot)\.(device|enable|efiSupport|canTouchEfiVariables)|networking\.hostName|imports' "$hw_conf_path" || echo "No matching entries found by grep in $hw_conf_path (this might be okay if using flakes heavily)."
             echo "--- End of $hw_conf_path excerpt ---"
-        } | sudo tee -a "$LOG_FILE" >/dev/null 
+        ) 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null 
     else
         log_error "$hw_conf_path NOT FOUND after nixos-generate-config execution! This is critical. Exiting."
         exit 1
@@ -668,10 +680,14 @@ generate_nixos_config() {
     
     if sudo test -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix"; then
         log "Removing default ${TARGET_NIXOS_CONFIG_DIR}/configuration.nix (will be replaced by flake structure)."
-        sudo rm -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix"
+        # Use log_sudo_cmd for rm
+        if ! log_sudo_cmd rm -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix"; then
+             log_error "Failed to remove default configuration.nix. Continuing, but this might be an issue."
+        fi
     fi
     
-    sudo mkdir -p "$TARGET_NIXOS_CONFIG_DIR" 
+    # Use log_sudo_cmd for mkdir
+    log_sudo_cmd mkdir -p "$TARGET_NIXOS_CONFIG_DIR" 
     copy_nix_modules 
     
     log "Generating the string of module import statements for flake.nix..."
@@ -704,23 +720,27 @@ install_nixos() {
     echo "" >&2
     
     if confirm "Proceed with NixOS installation using the generated configuration at '${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}'?" "Y"; then
-        log "User confirmed. Running 'nixos-install --no-root-passwd --flake ${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}'"
+        log "User confirmed. Preparing to run 'nixos-install --no-root-passwd --flake ${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}'"
         
-        sudo nixos-install --no-root-passwd --flake "${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}" &>> "$LOG_FILE" &
+        # MODIFIED: nixos-install output redirection
+        # Run in a subshell to handle backgrounding, pipefail, and tee correctly
+        ( set -o pipefail; sudo nixos-install --no-root-passwd --flake "${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null ) &
         local install_pid=$!
+        log "nixos-install process started in background with PID $install_pid."
         
         show_progress $install_pid "Installing NixOS (PID: $install_pid)" 
         
         local install_status=0 
-        if ! wait "$install_pid"; then
+        if ! wait "$install_pid"; then 
             install_status=$? 
             log_error "NixOS installation command (PID: $install_pid) failed with exit status: $install_status"
         else
-            # If wait $install_pid succeeds, $? is the exit status of $install_pid
             install_status=$? 
             if [ "$install_status" -eq 0 ]; then
                 log "NixOS installation command (PID: $install_pid) completed successfully."
             else
+                # This case might be redundant if `wait "$install_pid"` fails for non-zero exit,
+                # but it's good for clarity if `wait` itself succeeds but $? is non-zero.
                 log_error "NixOS installation command (PID: $install_pid) completed with non-zero exit status: $install_status."
             fi
         fi
@@ -803,10 +823,14 @@ main() {
             fi
             echo "Sudo privileges acquired." >&2
         else
-            echo "Passwordless sudo available or already has privileges." >&2 # Should not happen if EUID != 0
+            # This branch might be hit if EUID != 0 but passwordless sudo is available.
+             log "Script not run as root, but passwordless sudo seems available."
         fi
+    else
+        log "Script is running as root."
     fi
 
+    # Initialize log file (truncate/create as root)
     echo "Initializing NixOS Installation Script. Log file: $LOG_FILE" | sudo tee "$LOG_FILE" >/dev/null 
     
     echo "======================================================================" >&2
