@@ -64,6 +64,90 @@ log_sudo_cmd() {
     sudo "$@"
 }
 
+# Helper function to escape strings for use in sed replacement
+_escape_sed_replacement_string() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/|/\\|/g' -e "s/'/'\\\\''/g" -e 's/"/\\"/g' -e 's/%/\\%/g' -e 's/\//\\\//g'
+}
+
+# Helper function to escape strings for use in sed pattern (like the placeholder)
+_escape_sed_pattern_string() {
+    printf '%s' "$1" | sed -e 's/[\/&*$]/\\&/g' -e 's/%/\\%/g' # Basic escaping for common sed pattern chars + %
+}
+
+# This function generates the flake.nix, substitutes user variables,
+# and injects the dynamically generated list of module imports.
+generate_flake_with_modules() {
+    local template_file_basename="$1" # e.g., flake.nix.template
+    local output_file_basename="$2"   # e.g., flake.nix
+    local template_path="${TEMPLATE_DIR}/${template_file_basename}"
+    local output_path_final="${TARGET_NIXOS_CONFIG_DIR}/${output_file_basename}"
+    local nixos_module_imports_string="$3" # Pass the pre-generated module imports string as the third argument
+
+    if [[ ! -f "$template_path" ]]; then
+        echo "ERROR: Template file not found: $template_path"
+        return 1
+    fi
+
+    echo "LOG: Generating initial $output_file_basename from $template_file_basename (pass 1)..."
+
+    # Sed script for the first pass (variable substitution)
+    # Using | as delimiter for sed here as __PLACEHOLDERS__ are unlikely to contain it.
+    local sed_script_pass1="
+      s|__NIXOS_USERNAME__|$(_escape_sed_replacement_string "$NIXOS_USERNAME")|g;
+      s|__PASSWORD_HASH__|$(_escape_sed_replacement_string "$PASSWORD_HASH")|g;
+      s|__GIT_USERNAME__|$(_escape_sed_replacement_string "$GIT_USERNAME")|g;
+      s|__GIT_USEREMAIL__|$(_escape_sed_replacement_string "$GIT_USEREMAIL")|g;
+      s|__HOSTNAME__|$(_escape_sed_replacement_string "$HOSTNAME")|g;
+      s|__TARGET_DISK_FOR_GRUB__|$(_escape_sed_replacement_string "$TARGET_DISK")|g;
+    "
+
+    local temp_output_pass1
+    temp_output_pass1=$(mktemp)
+
+    # Apply the first pass of substitutions
+    if ! sudo sed "$sed_script_pass1" "${template_path}" > "${temp_output_pass1}"; then
+        echo "ERROR: sed command (pass 1 - variable substitution) failed for ${output_file_basename}."
+        rm -f "$temp_output_pass1"
+        return 1
+    fi
+    echo "LOG: Pass 1 (variable substitution) for ${output_file_basename} successful."
+
+    # Pass 2: Insert the dynamic module list
+    echo "LOG: Inserting dynamic module list into ${output_file_basename} (pass 2)..."
+    local placeholder_to_replace="#__NIXOS_MODULE_IMPORTS_PLACEHOLDER__#"
+    # Ensure placeholder is escaped for sed pattern
+    local escaped_placeholder_pattern=$(_escape_sed_pattern_string "$placeholder_to_replace")
+
+    # For the replacement string (module imports), escape characters that have special meaning in sed's replacement part
+    local escaped_module_imports_for_sed_replacement
+    escaped_module_imports_for_sed_replacement=$(_escape_sed_replacement_string "${nixos_module_imports_string}")
+
+
+    local temp_output_pass2
+    temp_output_pass2=$(mktemp)
+
+    # Apply the second pass: replace the module placeholder with the generated list
+    # Use '%' as the sed delimiter to avoid conflicts with '/' in paths.
+    if command sudo sed "s%${escaped_placeholder_pattern}%${escaped_module_imports_for_sed_replacement}%g" "${temp_output_pass1}" > "${temp_output_pass2}"; then
+        if sudo mv "$temp_output_pass2" "$output_path_final"; then
+            echo "LOG: ${output_file_basename} generated successfully with dynamic modules at ${output_path_final}."
+            sudo chmod 644 "$output_path_final"
+            rm -f "$temp_output_pass1" # Clean up pass 1 temp
+        else
+            echo "ERROR: Failed to move final ${output_file_basename} to ${output_path_final}."
+            rm -f "$temp_output_pass1" "$temp_output_pass2"
+            return 1
+        fi
+    else
+        echo "ERROR: sed command (pass 2 - module import injection) failed for ${output_file_basename}."
+        echo "DEBUG: Placeholder pattern: ${escaped_placeholder_pattern}"
+        echo "DEBUG: Replacement string (escaped for sed): ${escaped_module_imports_for_sed_replacement}"
+        rm -f "$temp_output_pass1" "$temp_output_pass2"
+        return 1
+    fi
+}
+
+
 # --- 0. Preamble and Critical Warning ---
 echo "===================================================================="
 echo "NixOS Flake-based Installation Helper Script (Debug Enhanced)"
@@ -256,11 +340,12 @@ confirm "FINAL WARNING: ALL DATA ON '$TARGET_DISK' WILL BE ERASED. Proceed with 
     fi
     CALCULATED_TOTAL_ALLOCATED_MiB=$((EFI_START_OFFSET_MiB + EFI_SIZE_MiB_ACTUAL + ROOT_SIZE_MiB_ACTUAL + SWAP_SIZE_REQUESTED_MiB_INT))
     if [ "$CALCULATED_TOTAL_ALLOCATED_MiB" -gt "$TOTAL_DISK_MiB" ]; then
-        if [ "$((CALCULATED_TOTAL_ALLOCATED_MiB - TOTAL_DISK_MiB))" -gt 4 ]; then # Allow small discrepancy (e.g. 4MiB)
+        # Allow a small discrepancy (e.g., up to 4MiB) due to MiB vs M calculations by sfdisk or other tools
+        if [ "$((CALCULATED_TOTAL_ALLOCATED_MiB - TOTAL_DISK_MiB))" -gt 4 ]; then
             echo "Error: Calculated total partition allocation (${CALCULATED_TOTAL_ALLOCATED_MiB}MiB) significantly exceeds disk size (${TOTAL_DISK_MiB}MiB)."
             exit 1
         else
-             echo "WARN: Calculated total partition allocation (${CALCULATED_TOTAL_ALLOCATED_MiB}MiB) slightly exceeds disk size (${TOTAL_DISK_MiB}MiB). This might be due to rounding. Proceeding with caution."
+            echo "WARN: Calculated total partition allocation (${CALCULATED_TOTAL_ALLOCATED_MiB}MiB) slightly exceeds disk size (${TOTAL_DISK_MiB}MiB). This might be due to rounding or conversion differences. Proceeding with caution."
         fi
     fi
 
@@ -381,17 +466,16 @@ echo "Step 4: Generating Flake and copying custom NixOS module files..."
 log_sudo_cmd mkdir -p "${TARGET_NIXOS_CONFIG_DIR}"
 echo "LOG: Ensured ${TARGET_NIXOS_CONFIG_DIR} exists."
 
-# --- Part 1: Copy all .nix files (except flake.nix.template) from templates to target ---
+# --- Part 1: Copy all .nix files (except flake.nix.template, hardware-configuration.nix) from templates to target ---
 echo "LOG: Copying .nix module files from ${TEMPLATE_DIR} to ${TARGET_NIXOS_CONFIG_DIR}..."
 for nix_source_file in "${TEMPLATE_DIR}"/*.nix; do
     if [ -f "$nix_source_file" ]; then
-        local nix_filename
         nix_filename=$(basename "$nix_source_file")
-        # Skip copying flake.nix.template itself in this step
-        if [[ "$nix_filename" == "flake.nix.template" ]]; then
+        # Skip copying flake.nix.template and hardware-configuration.nix itself in this step
+        if [[ "$nix_filename" == "flake.nix.template" || "$nix_filename" == "hardware-configuration.nix" ]]; then
             continue
         fi
-        local dest_path="${TARGET_NIXOS_CONFIG_DIR}/${nix_filename}"
+        dest_path="${TARGET_NIXOS_CONFIG_DIR}/${nix_filename}"
         echo "LOG: Copying $nix_filename to $dest_path..."
         if sudo cp "$nix_source_file" "$dest_path"; then
             sudo chmod 644 "$dest_path"
@@ -406,108 +490,42 @@ echo "LOG: Finished copying .nix module files."
 
 # --- Part 2: Generate the list of NixOS module imports ---
 echo "LOG: Generating dynamic NixOS module import list..."
-declare -a nixos_module_imports=()
+declare -a nixos_module_imports_array=() # Renamed to avoid conflict if nixos_module_imports is used elsewhere
+# Use find to list files and handle spaces/special characters in filenames safely
+# Read null-delimited output of find
 while IFS= read -r -d $'\0' module_file_path; do
+    # Get just the filename
     module_filename=$(basename "$module_file_path")
+    # Exclude specific files that are not directly imported in the main list
     if [[ "$module_filename" == "flake.nix.template" || "$module_filename" == "home-manager-user.nix" || "$module_filename" == "hardware-configuration.nix" ]]; then
         continue
     fi
-    nixos_module_imports+=("        ./${module_filename}")
-done < <(find "$TEMPLATE_DIR" -maxdepth 1 -name "*.nix" -print0)
+    # Add with correct Nix formatting (indentation and path prefix)
+    nixos_module_imports_array+=("        ./${module_filename}") # 8 spaces for indentation
+done < <(find "$TEMPLATE_DIR" -maxdepth 1 -type f -name "*.nix" -print0) # find .nix files in template dir, print null-delimited, ensure they are files
 
-nixos_module_imports_string=""
-if [ ${#nixos_module_imports[@]} -gt 0 ]; then
-    printf -v nixos_module_imports_string '%s\n' "${nixos_module_imports[@]}"
-    nixos_module_imports_string=$(echo -e "${nixos_module_imports_string}" | sed '/^$/d') # Remove empty lines if any from printf
+# Join the array elements into a single string with newlines
+generated_nixos_module_imports_string="" # Renamed to avoid conflict
+for import_line in "${nixos_module_imports_array[@]}"; do
+    generated_nixos_module_imports_string+="${import_line}\n"
+done
+# Remove the last newline if the list is not empty
+if [ -n "$generated_nixos_module_imports_string" ]; then
+    # Use printf to remove trailing newline robustly
+    generated_nixos_module_imports_string=$(printf '%s' "$generated_nixos_module_imports_string")
 fi
+
+
 echo "LOG: Generated module import block:"
-echo -e "------ Start of Module Imports ------\n${nixos_module_imports_string}\n------- End of Module Imports -------"
+echo -e "------ Start of Module Imports ------\n${generated_nixos_module_imports_string}\n------- End of Module Imports -------"
+
 
 # --- Part 3: Generate flake.nix from template and insert dynamic module list ---
-generate_from_template_and_inject_modules() {
-    local template_file_basename="$1"
-    local output_file_basename="$2"
-    local template_path="${TEMPLATE_DIR}/${template_file_basename}"
-    local output_path_final="${TARGET_NIXOS_CONFIG_DIR}/${output_file_basename}"
-
-    if [[ ! -f "$template_path" ]]; then
-        echo "ERROR: Template file not found: $template_path"
-        return 1
-    fi
-
-    echo "LOG: Generating initial $output_file_basename from $template_file_basename (pass 1)..."
-
-    _escape_sed_replacement_string() {
-        printf '%s\n' "$1" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/|/\\|/g' -e "s/'/'\\\\''/g" -e 's/"/\\"/g'
-    }
-    
-    _escape_sed_pattern_string() {
-        printf '%s\n' "$1" | sed -e 's/[\/&*$]/\\&/g' # Basic escaping for common sed pattern chars
-    }
-
-    local escaped_nixos_username=$(_escape_sed_replacement_string "$NIXOS_USERNAME")
-    local escaped_password_hash=$(_escape_sed_replacement_string "$PASSWORD_HASH")
-    local escaped_git_username=$(_escape_sed_replacement_string "$GIT_USERNAME")
-    local escaped_git_useremail=$(_escape_sed_replacement_string "$GIT_USEREMAIL")
-    local escaped_hostname=$(_escape_sed_replacement_string "$HOSTNAME")
-    local escaped_target_disk=$(_escape_sed_replacement_string "$TARGET_DISK")
-
-    local sed_script_expressions_pass1=()
-    sed_script_expressions_pass1+=("-e s|__NIXOS_USERNAME__|${escaped_nixos_username}|g")
-    sed_script_expressions_pass1+=("-e s|__PASSWORD_HASH__|${escaped_password_hash}|g")
-    sed_script_expressions_pass1+=("-e s|__GIT_USERNAME__|${escaped_git_username}|g")
-    sed_script_expressions_pass1+=("-e s|__GIT_USEREMAIL__|${escaped_git_useremail}|g")
-    sed_script_expressions_pass1+=("-e s|__HOSTNAME__|${escaped_hostname}|g")
-    sed_script_expressions_pass1+=("-e s|__TARGET_DISK_FOR_GRUB__|${escaped_target_disk}|g")
-
-    local temp_output_pass1
-    temp_output_pass1=$(mktemp)
-
-    if ! command sudo sed "${sed_script_expressions_pass1[@]}" "${template_path}" > "${temp_output_pass1}"; then
-        echo "ERROR: sed command (pass 1 - variable substitution) failed for ${output_file_basename}."
-        rm -f "$temp_output_pass1"
-        return 1
-    fi
-    echo "LOG: Pass 1 (variable substitution) for ${output_file_basename} successful."
-    
-    echo "LOG: Inserting dynamic module list into ${output_file_basename} (pass 2)..."
-    local placeholder_to_replace="#__NIXOS_MODULE_IMPORTS_PLACEHOLDER__#"
-    # Ensure placeholder is escaped for sed pattern
-    local escaped_placeholder_pattern=$(_escape_sed_pattern_string "$placeholder_to_replace")
-
-    # For the replacement string (module imports), escape characters that have special meaning in sed's replacement part
-    local escaped_module_imports_for_sed_replacement
-    escaped_module_imports_for_sed_replacement=$(echo "${nixos_module_imports_string}" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/\//\\\//g')
-
-
-    local temp_output_pass2
-    temp_output_pass2=$(mktemp)
-
-    # Use a known-safe delimiter like '%' if the replacement string could contain '/'
-    # Even better, ensure the replacement string has its slashes escaped.
-    if command sudo sed "s%${escaped_placeholder_pattern}%${escaped_module_imports_for_sed_replacement}%g" "${temp_output_pass1}" > "${temp_output_pass2}"; then
-        if sudo mv "$temp_output_pass2" "$output_path_final"; then
-            echo "LOG: ${output_file_basename} generated successfully with dynamic modules at ${output_path_final}."
-            sudo chmod 644 "$output_path_final"
-            rm -f "$temp_output_pass1"
-        else
-            echo "ERROR: Failed to move final ${output_file_basename} to ${output_path_final}."
-            rm -f "$temp_output_pass1" "$temp_output_pass2"
-            return 1
-        fi
-    else
-        echo "ERROR: sed command (pass 2 - module import injection) failed for ${output_file_basename}."
-        echo "DEBUG: Placeholder pattern: ${escaped_placeholder_pattern}"
-        echo "DEBUG: Replacement string (escaped for sed): ${escaped_module_imports_for_sed_replacement}"
-        rm -f "$temp_output_pass1" "$temp_output_pass2"
-        return 1
-    fi
-}
-
 FLAKE_TEMPLATE_BASENAME="flake.nix.template"
 FLAKE_OUTPUT_BASENAME="flake.nix"
 
-if ! generate_from_template_and_inject_modules "$FLAKE_TEMPLATE_BASENAME" "$FLAKE_OUTPUT_BASENAME"; then
+# Call the function to generate flake.nix, passing the generated module string
+if ! generate_flake_with_modules "$FLAKE_TEMPLATE_BASENAME" "$FLAKE_OUTPUT_BASENAME" "${generated_nixos_module_imports_string}"; then
     echo "ERROR: Failed to generate comprehensive ${FLAKE_OUTPUT_BASENAME}. Aborting installation."
     exit 1
 fi
@@ -532,4 +550,11 @@ if sudo nixos-install --no-root-passwd --flake "${TARGET_NIXOS_CONFIG_DIR}#${HOS
     echo "--------------------------------------------------------------------"
 else
     echo "ERROR: nixos-install failed. Please check the output above for errors."
-    echo "The
+    echo "The system filesystems are still mounted at /mnt."
+    echo "You can investigate files in ${TARGET_NIXOS_CONFIG_DIR} or try installation steps again."
+    exit 1
+fi
+
+echo "===================================================================="
+echo "Script finished."
+exit 0
