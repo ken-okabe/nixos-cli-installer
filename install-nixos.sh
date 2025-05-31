@@ -295,7 +295,6 @@ calculate_partitions() {
     SWAP_SIZE_MIB_CALC=$swap_size_actual_mib
 }
 
-
 create_partitions() {
     log "Creating partition scheme on $TARGET_DISK..."
     
@@ -312,12 +311,12 @@ create_partitions() {
     local swap_type_guid="0657FD6D-A4AB-43C4-84E5-0933C84B4F4F" 
     
     local sfdisk_input
+    # MODIFIED: Removed "unit: MiB" and added "M" suffix to start/size values
     sfdisk_input=$(cat <<EOF
 label: gpt
-unit: MiB
-${EFI_DEVICE_NODE} : start=${EFI_START_MIB_CALC}, size=${EFI_SIZE_MIB_CALC}, type=${efi_type_guid}, name="${EFI_PART_NAME}"
-${ROOT_DEVICE_NODE} : start=${ROOT_START_MIB_CALC}, size=${ROOT_SIZE_MIB_CALC}, type=${root_type_guid}, name="${ROOT_PART_NAME}"
-${SWAP_DEVICE_NODE} : start=${SWAP_START_MIB_CALC}, size=${SWAP_SIZE_MIB_CALC}, type=${swap_type_guid}, name="${SWAP_PART_NAME}"
+${EFI_DEVICE_NODE} : start=${EFI_START_MIB_CALC}M, size=${EFI_SIZE_MIB_CALC}M, type=${efi_type_guid}, name="${EFI_PART_NAME}"
+${ROOT_DEVICE_NODE} : start=${ROOT_START_MIB_CALC}M, size=${ROOT_SIZE_MIB_CALC}M, type=${root_type_guid}, name="${ROOT_PART_NAME}"
+${SWAP_DEVICE_NODE} : start=${SWAP_START_MIB_CALC}M, size=${SWAP_SIZE_MIB_CALC}M, type=${swap_type_guid}, name="${SWAP_PART_NAME}"
 EOF
 ) 
     
@@ -341,7 +340,6 @@ EOF
     log "Partition scheme applied. Verifying partitions on $TARGET_DISK:"
     sudo sfdisk -l "$TARGET_DISK" | sudo tee -a "$LOG_FILE" 
 }
-
 
 format_partitions() {
     log "Formatting partitions..."
