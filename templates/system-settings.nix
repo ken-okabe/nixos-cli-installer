@@ -23,9 +23,7 @@
     alsa.support32Bit = true;
     pulse.enable = true;
   };
-  virtualisation.virtualbox.host.enable = true;
-  # Ensure the user passed from flake.nix is added to vboxusers if it's not a placeholder
-  users.extraGroups.vboxusers.members = lib.optional (config.specialArgs.nixosUsername != "__NIXOS_USERNAME__") config.specialArgs.nixosUsername;
+ 
 
   networking.firewall.enable = false;
 }
