@@ -525,7 +525,6 @@ copy_nix_modules() {
     log "Custom NixOS module files copied."
 }
 
-
 generate_module_imports() {
     local imports_array=()
     local copied_module_files
@@ -533,25 +532,26 @@ generate_module_imports() {
                             -not -name "flake.nix.template" \
                             -not -name "hardware-configuration.nix")
 
+    # サブシェルを避けるため、別の方法で配列を構築
     if [ -n "$copied_module_files" ]; then
-        echo "$copied_module_files" | while IFS= read -r module_path; do
+        while IFS= read -r module_path; do
             local filename
             filename=$(basename "$module_path")
-            imports_array+=("      ./${filename}") 
-        done
+            imports_array+=("      ./${filename}")
+        done <<< "$copied_module_files"  # Here文字列を使用してサブシェルを回避
     fi
     
+    # hardware-configuration.nixを常に追加
     imports_array+=("      ./hardware-configuration.nix")
 
     local import_string=""
     if [[ ${#imports_array[@]} -gt 0 ]]; then
         printf -v import_string '%s\n' "${imports_array[@]}"
-        import_string=${import_string%?} 
+        import_string=${import_string%$'\n'}  # 末尾の改行を削除
     fi
     
     echo "$import_string" 
 }
-
 
 # === User Input Functions ===
 get_user_input() {
