@@ -6,7 +6,7 @@
 
 let
   username = specialArgs.username;
-  gitUsername = specialArgs.gitUsername;
+  gitUsername = specialArgs.username; # Changed to username directly for consistency
   gitUseremail = specialArgs.gitUseremail;
   hostname = specialArgs.hostname;
 in
@@ -70,6 +70,9 @@ in
       # Custom Zsh settings
       export EDITOR=nano # Or your preferred editor
 
+      # Set terminal interrupt character to Ctrl+T
+      stty intr ^T
+
       # Powerlevel10k initialization
       if [ -f "${pkgs.zsh-powerlevel10k}/share/zsh-powerlevel10k/powerlevel10k.zsh-theme" ]; then
         source "${pkgs.zsh-powerlevel10k}/share/zsh-powerlevel10k/powerlevel10k.zsh-theme"
@@ -114,15 +117,16 @@ in
       background-opacity = 0.9;
 
       split-divider-color = "green";
-      #gtk-titlebar = false;
+      gtk-titlebar = false;
 
       # Keybindings
       keybind = [
         # Copy/Paste
+        "ctrl+c=copy_to_clipboard"         # Add this line for Ctrl+C to copy
         "ctrl+shift+c=copy_to_clipboard"
         "ctrl+shift+v=paste_from_clipboard"
 
-        "ctrl+g=copy_to_clipboard"
+        # "ctrl+g=copy_to_clipboard"         # This line is removed as requested
         "ctrl+v=paste_from_clipboard"
 
         # Pane/Split navigation and manipulation
@@ -171,10 +175,9 @@ in
     };
   };
 
+
   programs.direnv = {
-    enable = true;      // direnv を有効にする
-    nix-direnv.enable = true; // Nix 環境 (特に Flakes) との連携を強化する
+    enable = true;     
+    nix-direnv.enable = true; 
   };
-
-
 }
