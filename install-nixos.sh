@@ -40,20 +40,31 @@ log_error() {
 }
 
 log_cmd() {
-    log "CMD: $*"
-    if ! "$@" >> "$LOG_FILE" 2>&1; then
-        log_error "Command failed with exit code $?: $*"
+    log "CMD: $*" # コマンド実行のログ自体は現在のlog関数でOK
+    local status
+    # コマンドを実行し、その標準出力と標準エラー出力をパイプで sudo tee -a に渡す
+    # サブシェル内で pipefail を設定し、コマンド自体の失敗をstatusで捉える
+    # teeの出力を /dev/null に捨てて、コンソールへの二重出力を防ぐ
+    if ! (set -o pipefail; "$@" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null); then
+        status=$? # パイプラインの終了ステータスを取得
+        log_error "Command failed with exit code $status: $*"
         return 1
     fi
+    return 0
 }
 
 log_sudo_cmd() {
-    log "SUDO CMD: $*"
-    if ! sudo "$@" >> "$LOG_FILE" 2>&1; then
-        log_error "Sudo command failed with exit code $?: $*"
+    log "SUDO CMD: $*" # コマンド実行のログ自体は現在のlog関数でOK
+    local status
+    # sudoでコマンドを実行し、同様に処理
+    if ! (set -o pipefail; sudo "$@" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null); then
+        status=$? # パイプラインの終了ステータスを取得
+        log_error "Sudo command failed with exit code $status: $*"
         return 1
     fi
+    return 0
 }
+
 
 # === Dependency Checking ===
 check_dependencies() {
