@@ -170,4 +170,11 @@ in
       panel-position = "TOP";
     };
   };
+
+  programs.direnv = {
+    enable = true;      // direnv を有効にする
+    nix-direnv.enable = true; // Nix 環境 (特に Flakes) との連携を強化する
+  };
+
+
 }
