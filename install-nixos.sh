@@ -402,7 +402,6 @@ format_partitions() {
     log "Partition formatting completed successfully."
 }
 
-
 mount_filesystems() {
     log "Mounting filesystems..."
     
@@ -434,9 +433,11 @@ mount_filesystems() {
     log_sudo_cmd swapon "$SWAP_DEVICE_NODE"
     
     log "Filesystems mounted and swap enabled successfully."
-    log "Current filesystem layout on $TARGET_DISK:"
-    (set -o pipefail; sudo lsblk -fpo NAME,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINT,PARTUUID "$TARGET_DISK" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null)
+    log "Current filesystem layout on $TARGET_DISK (output to console and log):"
+    # MODIFIED: Removed >/dev/null to allow tee to output to console as well
+    (set -o pipefail; sudo lsblk -fpo NAME,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINT,PARTUUID "$TARGET_DISK" 2>&1 | sudo tee -a "$LOG_FILE")
 }
+  
 
 # === Configuration Generation Functions ===
 generate_flake_with_modules() {
@@ -732,21 +733,15 @@ install_nixos() {
         
         show_progress $install_pid "Installing NixOS (PID: $install_pid)" 
         
-        local install_status=0 
-        if ! wait "$install_pid"; then 
-            install_status=$? 
-            log_error "NixOS installation command (PID: $install_pid) failed with exit status: $install_status"
-        else
-            install_status=$? 
-            if [ "$install_status" -eq 0 ]; then
-                log "NixOS installation command (PID: $install_pid) completed successfully."
-            else
-                log_error "NixOS installation command (PID: $install_pid) completed with non-zero exit status: $install_status."
-            fi
-        fi
+        # MODIFIED: Simplified and corrected wait logic
+        wait "$install_pid"
+        local install_status=$? 
 
         if [ "$install_status" -eq 0 ]; then
-            log "NixOS installation has completed successfully!"
+            log "NixOS installation command (PID: $install_pid) completed successfully (exit status: 0)."
+            # This is the primary success message logged before user-facing messages.
+            log "NixOS installation phase appears to have completed successfully."
+
             echo "" >&2
             echo "======================================================================" >&2
             echo "      NixOS Installation Complete!                                  " >&2
@@ -789,20 +784,25 @@ install_nixos() {
                 esac
             done
         else 
-            log_error "NixOS installation FAILED. Exit status from nixos-install was: $install_status"
+            # This block is now the single point of failure reporting for nixos-install
+            log_error "NixOS installation command (PID: $install_pid) FAILED with exit status: $install_status."
+            # The detailed error from nixos-install itself should be in $LOG_FILE (and potentially /mnt/var/log/nixos-install.log)
+
             echo "" >&2
             echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
             echo "!!! NixOS Installation FAILED. Please check the log file:          !!!" >&2
             echo "!!!   $LOG_FILE                                                    !!!"
+            echo "!!! The actual error from nixos-install should be in this log.     !!!"
             echo "!!! You may also find more specific errors from nixos-install in:  !!!"
-            echo "!!!   /mnt/var/log/nixos-install.log (if it was created)           !!!"
+            echo "!!!   /mnt/var/log/nixos-install.log (if it was created on /mnt)   !!!"
             echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
             echo "" >&2
             echo "Common reasons for failure include:" >&2
             echo "  - Network connectivity issues during package downloads." >&2
-            echo "  - Errors in your custom NixOS configuration/flake (syntax, missing options)." >&2
-            echo "  - Insufficient disk space (though this script attempts checks)." >&2
+            echo "  - Errors in your custom NixOS configuration/flake (syntax, missing options, package build failures)." >&2
+            echo "  - Insufficient disk space (check space on /mnt and for /nix/store within the chroot)." >&2
             echo "  - Hardware compatibility issues not addressed in configuration." >&2
+            echo "  - Bootloader installation problems." >&2
             exit 1 
         fi
     else
