@@ -525,33 +525,50 @@ copy_nix_modules() {
     log "Custom NixOS module files copied."
 }
 
+           
+
 generate_module_imports() {
     local imports_array=()
-    local copied_module_files
-    copied_module_files=$(find "$TEMPLATE_DIR" -maxdepth 1 -name "*.nix" -type f \
-                            -not -name "flake.nix.template" \
-                            -not -name "hardware-configuration.nix")
+    
+    # カスタムモジュールファイルを検索
+    if [[ -d "$TEMPLATE_DIR" ]]; then
+        local copied_module_files
+        copied_module_files=$(find "$TEMPLATE_DIR" -maxdepth 1 -name "*.nix" -type f \
+                                -not -name "flake.nix.template" \
+                                -not -name "hardware-configuration.nix" 2>/dev/null)
 
-    # サブシェルを避けるため、別の方法で配列を構築
-    if [ -n "$copied_module_files" ]; then
-        while IFS= read -r module_path; do
-            local filename
-            filename=$(basename "$module_path")
-            imports_array+=("      ./${filename}")
-        done <<< "$copied_module_files"  # Here文字列を使用してサブシェルを回避
+        if [[ -n "$copied_module_files" ]]; then
+            while IFS= read -r module_path; do
+                if [[ -n "$module_path" && -f "$module_path" ]]; then
+                    local filename
+                    filename=$(basename "$module_path")
+                    imports_array+=("      ./${filename}")
+                fi
+            done <<< "$copied_module_files"
+        fi
     fi
     
-    # hardware-configuration.nixを常に追加
+    # hardware-configuration.nixを必ず追加
     imports_array+=("      ./hardware-configuration.nix")
 
+    # 配列が空でないことを確認して文字列を生成
     local import_string=""
     if [[ ${#imports_array[@]} -gt 0 ]]; then
-        printf -v import_string '%s\n' "${imports_array[@]}"
-        import_string=${import_string%$'\n'}  # 末尾の改行を削除
+        # 最初の要素
+        import_string="${imports_array[0]}"
+        # 残りの要素を追加
+        for ((i=1; i<${#imports_array[@]}; i++)); do
+            import_string="$import_string"$'\n'"${imports_array[i]}"
+        done
+    else
+        # フォールバック（これは起こらないはず）
+        import_string="      ./hardware-configuration.nix"
     fi
     
-    echo "$import_string" 
+    echo "$import_string"
 }
+
+
 
 # === User Input Functions ===
 get_user_input() {
