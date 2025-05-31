@@ -13,6 +13,4 @@
     http-connections = 100;
     max-jobs = "auto";
   };
-  # Ensure the user passed from flake.nix is added to vboxusers if it's not a placeholder
-  users.extraGroups.vboxusers.members = lib.optional (config.specialArgs.nixosUsername != "__NIXOS_USERNAME__") config.specialArgs.nixosUsername;
 }
