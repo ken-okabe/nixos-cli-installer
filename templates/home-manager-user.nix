@@ -73,7 +73,7 @@
       font-size = 12;
       background-opacity = 0.9;
       split-divider-color = "green";
-      gtk-titlebar = false;
+      gtk-titlebar = true;
       keybind = [
         "ctrl+c=copy_to_clipboard"
         "ctrl+shift+c=copy_to_clipboard"

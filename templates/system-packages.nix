@@ -16,7 +16,6 @@
 
     # Development
     nodejs_20    # Node.js LTS (includes npm) - choose version as needed
-    dotnetCorePackages.sdk_8_0-bin
     
     # Utilities
     webp-pixbuf-loader # For WebP image support in GTK/GNOME applications
@@ -40,7 +39,6 @@
     # Development Tools
     vscode          # Visual Studio Code (requires allowUnfree = true if using Microsoft's build)
                     # Alternatively, consider 'vscodium' for a fully FOSS build.
-    bun
     # Graphics and Media
     gimp            # GNU Image Manipulation Program
     losslesscut-bin # Tool for lossless trimming/cutting of video and audio files
