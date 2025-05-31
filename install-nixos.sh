@@ -1230,6 +1230,8 @@ main() {
 
     install_nixos
 
+}
+
 # Run main function
 
 main "$@"
