@@ -42,6 +42,9 @@ log_error() {
 log_cmd() {
     log "CMD: $*" 
     local status
+    # Execute command, pipe its stdout/stderr to sudo tee -a for logging.
+    # >/dev/null on tee prevents it from echoing to console (already logged by log "CMD: ...").
+    # Subshell with pipefail ensures we get the status of the command, not tee.
     if ! (set -o pipefail; "$@" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null); then
         status=$? 
         log_error "Command failed with exit code $status: $*"
@@ -323,30 +326,40 @@ ${SWAP_DEVICE_NODE} : start=${SWAP_START_MIB_CALC}M, size=${SWAP_SIZE_MIB_CALC}M
 EOF
 ) 
     
-    log "Applying partition scheme with sfdisk. Details:"
-    echo -e "$sfdisk_input" | sudo tee -a "$LOG_FILE" 
+    log "Applying partition scheme with sfdisk. Details (input script follows):"
+    echo -e "$sfdisk_input" | sudo tee -a "$LOG_FILE" >/dev/null
     
-    # sfdisk can be tricky with input. Ensure printf is safe.
-    if ! (printf "%s" "$sfdisk_input" | sudo sfdisk \
+    local sfdisk_status=0
+    log "Executing sfdisk command..." 
+    if ! (set -o pipefail; printf "%s" "$sfdisk_input" | sudo sfdisk \
         --wipe always \
         --wipe-partitions always \
-        "$TARGET_DISK" >> "$LOG_FILE" 2>&1) ; then # Capture sfdisk output directly to log for this critical step
-        log_error "sfdisk command failed. Check log for sfdisk output. Exiting."
+        "$TARGET_DISK" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null); then
+        sfdisk_status=$? 
+        log_error "sfdisk command failed with exit code $sfdisk_status. Check log for sfdisk's direct output. Exiting."
         exit 1
     fi
+    log "sfdisk command appears to have completed."
 
-    log "Partitioning supposedly complete. Informing kernel of changes..."
-    sync 
-    # partprobe can sometimes fail even if things are okay, so don't exit on its failure alone.
-    sudo partprobe "$TARGET_DISK" 2>> "$LOG_FILE" || log "partprobe $TARGET_DISK returned non-zero, attempting blockdev..."
-    sudo blockdev --rereadpt "$TARGET_DISK" 2>> "$LOG_FILE" || log "blockdev --rereadpt $TARGET_DISK also returned non-zero. Udev might still pick it up."
+    log "Informing kernel of partition changes..."
+    # Use log_cmd for sync as it's a non-sudo command whose output isn't critical but should be logged
+    log_cmd sync 
+
+    if ! log_sudo_cmd partprobe "$TARGET_DISK"; then
+        log_error "partprobe $TARGET_DISK returned non-zero (see log for details). Attempting blockdev..."
+    fi
+    if ! log_sudo_cmd blockdev --rereadpt "$TARGET_DISK"; then
+        log_error "blockdev --rereadpt $TARGET_DISK also returned non-zero (see log for details). Udev might still pick up changes."
+    fi
     
     log "Waiting for udev to settle partition changes..."
-    sudo udevadm settle
+    log_sudo_cmd udevadm settle
     sleep 3 
     
     log "Partition scheme applied. Verifying partitions on $TARGET_DISK:"
-    (set -o pipefail; sudo sfdisk -l "$TARGET_DISK" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null) || log_error "Failed to list partitions with sfdisk after creation, but continuing."
+    if ! log_sudo_cmd sfdisk -l "$TARGET_DISK"; then
+        log_error "Failed to list partitions with 'sfdisk -l' after creation (see log). Continuing cautiously..."
+    fi
 }
 
 
@@ -359,13 +372,13 @@ format_partitions() {
     
     while [[ (! -b "$EFI_DEVICE_NODE" || ! -b "$ROOT_DEVICE_NODE" || ! -b "$SWAP_DEVICE_NODE") && "$current_wait" -lt "$max_wait_seconds" ]]; do
         log "Device nodes not all available yet (waited $current_wait s). Triggering udev and waiting..."
-        sudo udevadm trigger 
-        sudo udevadm settle   
+        # udevadm trigger/settle are sudo commands
+        log_sudo_cmd udevadm trigger 
+        log_sudo_cmd udevadm settle   
         sleep 1
         current_wait=$((current_wait + 1))
     done
     
-    # Check individual nodes and log if missing, then one final check before exit
     if [[ ! -b "$EFI_DEVICE_NODE" ]]; then log_error "$EFI_DEVICE_NODE is not a block device after wait!"; fi
     if [[ ! -b "$ROOT_DEVICE_NODE" ]]; then log_error "$ROOT_DEVICE_NODE is not a block device after wait!"; fi
     if [[ ! -b "$SWAP_DEVICE_NODE" ]]; then log_error "$SWAP_DEVICE_NODE is not a block device after wait!"; fi
@@ -394,7 +407,6 @@ mount_filesystems() {
     log "Mounting filesystems..."
     
     log "Mounting Root partition $ROOT_DEVICE_NODE on /mnt"
-    # Using log_sudo_cmd for mount to ensure its output handling is consistent
     if ! log_sudo_cmd mount "$ROOT_DEVICE_NODE" /mnt; then
         log_error "Failed to mount root filesystem $ROOT_DEVICE_NODE on /mnt via log_sudo_cmd. Exiting."
         exit 1
@@ -409,7 +421,7 @@ mount_filesystems() {
     log "Mounting EFI partition $EFI_DEVICE_NODE on /mnt/boot"
     if ! log_sudo_cmd mount "$EFI_DEVICE_NODE" /mnt/boot; then
         log_error "Failed to mount EFI filesystem $EFI_DEVICE_NODE on /mnt/boot via log_sudo_cmd. Exiting."
-        sudo umount /mnt 2>/dev/null || true # Attempt to unmount root if boot mount fails
+        sudo umount /mnt 2>/dev/null || true 
         exit 1
     fi
      if ! mountpoint -q /mnt/boot; then 
@@ -435,8 +447,8 @@ generate_flake_with_modules() {
     local output_path="${TARGET_NIXOS_CONFIG_DIR}/${output_file}"
     
     if [[ ! -f "$template_path" ]]; then
-        log_error "Template file for $output_file not found: $template_path. Exiting."
-        return 1 # Changed from exit 1 to return 1 for functions
+        log_error "Template file for $output_file not found: $template_path." # Removed Exiting, will be handled by return 1
+        return 1
     fi
     
     log "Generating $output_file from template $template_path..."
@@ -444,8 +456,7 @@ generate_flake_with_modules() {
     local temp_processed_vars temp_final_output
     temp_processed_vars=$(mktemp)
     temp_final_output=$(mktemp)
-    # Consider adding trap for temp file cleanup within this function if it can error out before normal cleanup
-    # trap "rm -f '$temp_processed_vars' '$temp_final_output' 2>/dev/null" RETURN
+    trap "rm -f '$temp_processed_vars' '$temp_final_output' 2>/dev/null" RETURN # Cleanup temp files when function returns
 
     sed \
         -e "s/__NIXOS_USERNAME__/$(escape_for_sed "$NIXOS_USERNAME")/g" \
@@ -474,14 +485,13 @@ generate_flake_with_modules() {
     fi
     
     log "Installing generated file to $output_path"
-    # Using log_sudo_cmd for mv and chmod might be overkill if errors are already handled
     if sudo mv "$temp_final_output" "$output_path" && sudo chmod 644 "$output_path"; then
         log "$output_file generated and installed successfully at $output_path."
-        rm -f "$temp_processed_vars" 2>/dev/null # temp_final_output was moved
+        # temp_final_output was moved, temp_processed_vars will be cleaned by trap
         return 0
     else
-        log_error "Failed to install $output_file to $output_path or chmod failed. Temp files: $temp_processed_vars, $temp_final_output (if not moved). Review permissions. Exiting."
-        rm -f "$temp_processed_vars" "$temp_final_output" 2>/dev/null # Clean up as best as possible
+        log_error "Failed to install $output_file to $output_path or chmod failed. Review permissions."
+        # Temp files will be cleaned by trap
         return 1
     fi
 }
@@ -506,9 +516,8 @@ copy_nix_modules() {
         local dest_path="${TARGET_NIXOS_CONFIG_DIR}/${filename}"
         
         log "Copying $filename to $dest_path..."
-        # Using log_sudo_cmd for cp and chmod
         if ! log_sudo_cmd cp "$nix_file_path" "$dest_path" || ! log_sudo_cmd chmod 644 "$dest_path"; then
-            log_error "Failed to copy or chmod $filename to $dest_path. Exiting."
+            log_error "Failed to copy or chmod $filename to $dest_path. Exiting." # log_sudo_cmd already logs details
             exit 1 
         fi
     done
@@ -645,8 +654,7 @@ partition_and_format_disk() {
     prepare_mount_points 
     calculate_partitions 
     log "Turning off any existing swap devices on the system..."
-    # Use log_sudo_cmd for swapoff for consistent error/output handling, ignore error if no swap
-    log_sudo_cmd swapoff -a || log "No active swap to turn off, or swapoff -a returned non-zero (can be ignored if no swap)."
+    log_sudo_cmd swapoff -a || log_error "swapoff -a returned non-zero (this can be ignored if no swap was active)." # Continue even if it fails
     create_partitions 
     format_partitions 
     mount_filesystems 
@@ -657,20 +665,19 @@ partition_and_format_disk() {
 generate_nixos_config() {
     log "Generating NixOS configuration files in $TARGET_NIXOS_CONFIG_DIR..."
     log "Running 'nixos-generate-config --root /mnt' to create hardware-configuration.nix..."
-    # MODIFIED: Use log_sudo_cmd for nixos-generate-config
     if ! log_sudo_cmd nixos-generate-config --root /mnt; then
-        log_error "'nixos-generate-config --root /mnt' failed (see details above). Exiting."
+        # log_sudo_cmd already logs the specific error and exit code from nixos-generate-config
+        log_error "Exiting due to nixos-generate-config failure."
         exit 1
     fi
     log "'nixos-generate-config' completed."
 
     local hw_conf_path="${TARGET_NIXOS_CONFIG_DIR}/hardware-configuration.nix"
     if sudo test -f "$hw_conf_path"; then
-        log "Verifying generated $hw_conf_path content (key entries):"
-        # Pipe output of this command group to sudo tee -a to log it
+        log "Verifying generated $hw_conf_path content (key entries will be logged):"
         (
             echo "--- Relevant entries from $hw_conf_path ---"
-            sudo grep -E 'fileSystems\."/"|fileSystems\."/boot"|boot\.loader\.(grub|systemd-boot)\.(device|enable|efiSupport|canTouchEfiVariables)|networking\.hostName|imports' "$hw_conf_path" || echo "No matching entries found by grep in $hw_conf_path (this might be okay if using flakes heavily)."
+            sudo grep -E 'fileSystems\."/"|fileSystems\."/boot"|boot\.loader\.(grub|systemd-boot)\.(device|enable|efiSupport|canTouchEfiVariables)|networking\.hostName|imports' "$hw_conf_path" || echo "No matching entries found by grep in $hw_conf_path."
             echo "--- End of $hw_conf_path excerpt ---"
         ) 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null 
     else
@@ -680,13 +687,11 @@ generate_nixos_config() {
     
     if sudo test -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix"; then
         log "Removing default ${TARGET_NIXOS_CONFIG_DIR}/configuration.nix (will be replaced by flake structure)."
-        # Use log_sudo_cmd for rm
         if ! log_sudo_cmd rm -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix"; then
-             log_error "Failed to remove default configuration.nix. Continuing, but this might be an issue."
+             log_error "Failed to remove default configuration.nix. Continuing, but this might cause issues if it's not overwritten."
         fi
     fi
     
-    # Use log_sudo_cmd for mkdir
     log_sudo_cmd mkdir -p "$TARGET_NIXOS_CONFIG_DIR" 
     copy_nix_modules 
     
@@ -697,16 +702,15 @@ generate_nixos_config() {
     
     log "Generating main flake.nix from template..."
     if ! generate_flake_with_modules "flake.nix.template" "flake.nix" "$module_imports_str"; then
-        log_error "Failed to generate flake.nix. Exiting."
+        log_error "Failed to generate flake.nix. Exiting." # generate_flake_with_modules logs details
         exit 1
     fi
     
     log "NixOS configuration generation process completed."
-    log "IMPORTANT NOTE FOR THE USER:"
-    log "  Please ensure your flake.nix and any custom NixOS modules (now in $TARGET_NIXOS_CONFIG_DIR)"
-    log "  correctly utilize the settings from 'hardware-configuration.nix', especially for filesystems and bootloader."
-    log "  For EFI systems, confirm your NixOS configuration enables an EFI-compatible bootloader"
-    log "  (e.g., systemd-boot or GRUB for EFI) and can update EFI variables if needed."
+    log "IMPORTANT NOTE FOR THE USER:" # These are informational for the log
+    log "  Ensure your flake.nix and custom modules in $TARGET_NIXOS_CONFIG_DIR"
+    log "  correctly use 'hardware-configuration.nix' for filesystems/bootloader."
+    log "  For EFI systems, ensure an EFI bootloader is enabled and configured."
 }
 
 
@@ -722,8 +726,6 @@ install_nixos() {
     if confirm "Proceed with NixOS installation using the generated configuration at '${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}'?" "Y"; then
         log "User confirmed. Preparing to run 'nixos-install --no-root-passwd --flake ${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}'"
         
-        # MODIFIED: nixos-install output redirection
-        # Run in a subshell to handle backgrounding, pipefail, and tee correctly
         ( set -o pipefail; sudo nixos-install --no-root-passwd --flake "${TARGET_NIXOS_CONFIG_DIR}#${HOSTNAME}" 2>&1 | sudo tee -a "$LOG_FILE" >/dev/null ) &
         local install_pid=$!
         log "nixos-install process started in background with PID $install_pid."
@@ -739,8 +741,6 @@ install_nixos() {
             if [ "$install_status" -eq 0 ]; then
                 log "NixOS installation command (PID: $install_pid) completed successfully."
             else
-                # This case might be redundant if `wait "$install_pid"` fails for non-zero exit,
-                # but it's good for clarity if `wait` itself succeeds but $? is non-zero.
                 log_error "NixOS installation command (PID: $install_pid) completed with non-zero exit status: $install_status."
             fi
         fi
@@ -823,14 +823,12 @@ main() {
             fi
             echo "Sudo privileges acquired." >&2
         else
-            # This branch might be hit if EUID != 0 but passwordless sudo is available.
              log "Script not run as root, but passwordless sudo seems available."
         fi
     else
         log "Script is running as root."
     fi
 
-    # Initialize log file (truncate/create as root)
     echo "Initializing NixOS Installation Script. Log file: $LOG_FILE" | sudo tee "$LOG_FILE" >/dev/null 
     
     echo "======================================================================" >&2
