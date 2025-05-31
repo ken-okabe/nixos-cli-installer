@@ -298,7 +298,9 @@ name="${SWAP_PART_NAME}", start=${SWAP_START_OFFSET_MiB_ACTUAL}M, size=${SWAP_SI
 EOF
 )
     echo "LOG: sfdisk input prepared:"
-    echo -e "------ Start of SFDISK_INPUT ------\n${SFDISK_INPUT}\n------- End of SFDISK_INPUT -------"
+    echo -e "------ Start of SFDISK_INPUT ------
+${SFDISK_INPUT}
+------- End of SFDISK_INPUT -------"
 
     echo "LOG: Applying partition scheme using sfdisk on $TARGET_DISK..."
     printf "%s" "${SFDISK_INPUT}" | log_sudo_cmd sfdisk \
@@ -417,8 +419,8 @@ if [ -f "${TARGET_NIXOS_CONFIG_DIR}/configuration.nix" ]; then
 fi
 echo "--------------------------------------------------------------------"
 
-# --- 4. Generate Flake and Custom Module Files from Templates ---
-echo "Step 4: Generating Flake and custom NixOS module files..."
+# --- 4. Generate Flake and Custom Module Files ---
+echo "Step 4: Generating Flake and copying custom NixOS module files..."
 log_sudo_cmd mkdir -p "${TARGET_NIXOS_CONFIG_DIR}" # Ensure target directory exists
 echo "LOG: Ensured ${TARGET_NIXOS_CONFIG_DIR} exists."
 
@@ -436,7 +438,8 @@ generate_from_template() {
     echo "LOG: Generating $output_file_basename from $template_file_basename..."
 
     _escape_sed_replacement_string() {
-        printf '%s\n' "$1" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/|/\\|/g'
+        printf '%s
+' "$1" | sed -e 's/\/\/g' -e 's/&/\&/g' -e 's/|/\|/g'
     }
 
     local escaped_nixos_username=$(_escape_sed_replacement_string "$NIXOS_USERNAME")
@@ -463,7 +466,7 @@ generate_from_template() {
             echo "LOG: ${output_file_basename} generated successfully at ${output_path}."
             sudo chmod 644 "$output_path"
         else
-            echo "ERROR: Failed to move temporary file to ${output_path} (sudo mv \"$temp_output\" \"$output_path\")."
+            echo "ERROR: Failed to move temporary file to ${output_path} (sudo mv "$temp_output" "$output_path")."
             rm -f "$temp_output"
             return 1
         fi
@@ -474,29 +477,50 @@ generate_from_template() {
     fi
 }
 
-declare -a module_templates=(
-    "flake.nix.template:flake.nix"
-    "system-settings.nix.template:system-settings.nix"
-    "users.nix.template:users.nix"
-    "system-packages.nix.template:system-packages.nix"
-    "gnome-desktop.nix.template:gnome-desktop.nix"
-    "fonts-ime.nix.template:fonts-ime.nix"
-    "virtualbox-guest.nix.template:virtualbox-guest.nix"
-    "system-customizations.nix.template:system-customizations.nix"
-    "key-remap.nix.template:key-remap.nix"
-    "bootloader.nix.template:bootloader.nix"
-    "home-manager-user.nix.template:home-manager-user.nix"
+# Define the flake template and its output
+FLAKE_TEMPLATE_BASENAME="flake.nix.template"
+FLAKE_OUTPUT_BASENAME="flake.nix"
+
+echo "LOG: Generating $FLAKE_OUTPUT_BASENAME from $FLAKE_TEMPLATE_BASENAME..."
+# generate_from_template function is now called only for flake.nix
+if ! generate_from_template "$FLAKE_TEMPLATE_BASENAME" "$FLAKE_OUTPUT_BASENAME"; then
+    echo "ERROR: Failed to generate ${FLAKE_OUTPUT_BASENAME}. Aborting installation."
+    exit 1
+fi
+
+# Define other .nix module files to be copied directly
+declare -a nix_module_files=(
+    "system-settings.nix"
+    "users.nix"
+    "system-packages.nix"
+    "gnome-desktop.nix"
+    "fonts-ime.nix"
+    "virtualbox-guest.nix"
+    "system-customizations.nix"
+    "key-remap.nix"
+    "bootloader.nix"
+    "home-manager-user.nix"
 )
 
-for item in "${module_templates[@]}"; do
-    IFS=":" read -r template_name output_name <<< "$item"
-    if ! generate_from_template "$template_name" "$output_name"; then
-        echo "ERROR: Failed to generate ${output_name}. Aborting installation."
+echo "LOG: Copying other .nix module files..."
+for nix_file in "${nix_module_files[@]}"; do
+    local source_path="${TEMPLATE_DIR}/${nix_file}"
+    local dest_path="${TARGET_NIXOS_CONFIG_DIR}/${nix_file}"
+    if [[ ! -f "$source_path" ]]; then
+        echo "ERROR: Nix module file not found: $source_path"
+        exit 1
+    fi
+    echo "LOG: Copying $nix_file to $dest_path..."
+    if sudo cp "$source_path" "$dest_path"; then
+        sudo chmod 644 "$dest_path" # Ensure correct permissions
+        echo "LOG: ${nix_file} copied successfully."
+    else
+        echo "ERROR: Failed to copy ${nix_file} to ${dest_path}."
         exit 1
     fi
 done
 
-echo "All NixOS configuration files generated and placed in ${TARGET_NIXOS_CONFIG_DIR}/."
+echo "All NixOS configuration files processed and placed in ${TARGET_NIXOS_CONFIG_DIR}/."
 echo "--------------------------------------------------------------------"
 
 # --- 5. Install NixOS ---

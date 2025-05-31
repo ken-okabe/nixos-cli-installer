@@ -1,4 +1,4 @@
-# /templates/fonts-ime.nix.template
+# /templates/fonts-ime.nix
 #
 # Configures the Input Method Editor (IME) for Japanese input (Fcitx5 + Mozc)
 # and installs system-wide fonts.

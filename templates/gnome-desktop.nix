@@ -1,4 +1,4 @@
-# /templates/gnome-desktop.nix.template
+# /templates/gnome-desktop.nix
 { config, pkgs, lib, ... }:
 
 {

@@ -1,4 +1,4 @@
-# /templates/system-packages.nix.template
+# /templates/system-packages.nix
 #
 # Defines essential system-wide packages that should be available to all users.
 # More specialized applications or user-specific tools are often managed
